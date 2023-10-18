@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: terway-qos
+  labels:
+    {{- include "terway-qos.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "terway-qos.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "terway-qos.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: terway-qos
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      hostNetwork: true
+      initContainers:
+        - name: init
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          command:
+            - '/bin/init.sh'
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            privileged: true
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - 'qos'
+            - 'd'
+          volumeMounts:
+            - mountPath: /sys/fs/bpf
+              name: bpffs
+{{/*            - mountPath: /var/lib/terway/qos*/}}
+{{/*              name: config*/}}
+            - mountPath: /sys/fs/cgroup
+              name: cgroupfs
+            - mountPath: /var/lib/terway/qos
+              name: config
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+          - name: K8S_NODE_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: spec.nodeName
+
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        - operator: "Exists"
+      volumes:
+        - name: config
+          configMap:
+            name: terway-qos
+            items:
+              - key: global_bps_config
+                path: global_bps_config
+        - name: cgroupfs
+          hostPath:
+            path: /sys/fs/cgroup
+            type: "Directory"
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: "Directory"
+{{/*        - name: config*/}}
+{{/*          hostPath:*/}}
+{{/*            path: /var/lib/terway/qos*/}}
+{{/*            type: "DirectoryOrCreate"*/}}

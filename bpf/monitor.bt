@@ -1,0 +1,88 @@
+#!/usr/bin/env bpftrace
+
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+
+BEGIN
+{
+	@start = nsecs;
+	@start_monitor = nsecs;
+	@l0_rate = (uint64)0;
+	@l1_rate = (uint64)0;
+	@l0_bytes = (uint64)0;
+	@l1_bytes = (uint64)0;
+	@l2_bytes = (uint64)0;
+	@avg_cnt = (uint64)0;
+
+	@sample_interval = (uint64)100;
+	@monitor_interval = (uint64)1000;
+}
+
+//tracepoint:net:net_dev_start_xmit
+kprobe:start_xmit
+{
+	//$skb = ((struct sk_buff *)args->skbaddr);
+    $skb = ((struct sk_buff *)arg0);
+
+    $interval = (nsecs - @start)/1000000;
+
+    if ($interval >= @sample_interval) {
+        @l0_rate = @l0_bytes*(1000/$interval);
+        @l1_rate = @l1_bytes*(1000/$interval);
+        @l2_rate = @l2_bytes*(1000/$interval);
+
+
+        @avg_l0 = @avg_l0 + @l0_rate;
+        @avg_l1 = @avg_l1 + @l1_rate;
+        @avg_l2 = @avg_l2 + @l2_rate;
+
+        @avg_cnt = @avg_cnt + 1;
+
+        /* reinit counters */
+        @l0_bytes = 0;
+        @l1_bytes = 0;
+        @l2_bytes = 0;
+        @start = nsecs;
+    }
+
+    $interval = (nsecs - @start_monitor)/1000000;
+
+    if ($interval >= @monitor_interval) {
+
+        printf("l0/l1/l2{%d}(ms): %u/%u/%u(MBytes)\n",
+            $interval,
+            @avg_l0/@avg_cnt/1000/1000,
+            @avg_l1/@avg_cnt/1000/1000,
+            @avg_l2/@avg_cnt/1000/1000);
+        @avg_l0 = 0;
+        @avg_l1 = 0;
+        @avg_l2 = 0;
+        @start_monitor = nsecs;
+        @avg_cnt = 0;
+    }
+
+    if ($skb->priority ==0) {
+        @l0_bytes = @l0_bytes + $skb->len;
+    } else if ($skb->priority ==1) {
+        @l1_bytes = @l1_bytes + $skb->len;
+    }else if($skb->priority ==2) {
+        @l2_bytes = @l2_bytes + $skb->len;
+    }
+
+}
+
+END
+{
+	clear(@start);
+	clear(@start_monitor);
+	clear(@sample_interval);
+	clear(@monitor_interval);
+	clear(@l0_bytes);
+	clear(@l1_bytes);
+	clear(@l2_bytes);
+	clear(@avg_l0);
+	clear(@avg_l1);
+	clear(@l0_rate);
+	clear(@l1_rate);
+	clear(@avg_cnt);
+}

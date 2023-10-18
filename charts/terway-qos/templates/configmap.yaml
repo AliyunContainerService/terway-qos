@@ -1,0 +1,16 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: terway-qos
+data:
+  global_bps_config: |
+    hw_tx_bps_max 900000000
+    hw_rx_bps_max 0
+    offline_l1_tx_bps_min 100000000
+    offline_l1_tx_bps_max 200000000
+    offline_l2_tx_bps_min 100000000
+    offline_l2_tx_bps_max 300000000
+    offline_l1_rx_bps_min 0
+    offline_l1_rx_bps_max 0
+    offline_l2_rx_bps_min 0
+    offline_l2_rx_bps_max 0

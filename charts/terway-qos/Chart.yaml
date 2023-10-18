@@ -1,0 +1,7 @@
+apiVersion: v2
+name: terway-qos
+description: Network QoS
+
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
