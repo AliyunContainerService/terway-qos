@@ -40,7 +40,7 @@ var bpfBandwidthListCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		err = pterm.DefaultTable.WithHasHeader().WithData(pterm.TableData{
-			{"global", "l0", "l1", "l2"},
+			{"config", "l0", "l1", "l2"},
 			{"rx-max", fmt.Sprintf("%d", ing.HwGuaranteed), fmt.Sprintf("%d", ing.L1MaxBps), fmt.Sprintf("%d", ing.L2MaxBps)},
 			{"rx-min", fmt.Sprintf("%d", ing.L0MinBps), fmt.Sprintf("%d", ing.L1MinBps), fmt.Sprintf("%d", ing.L2MinBps)},
 			{"tx-max", fmt.Sprintf("%d", eg.HwGuaranteed), fmt.Sprintf("%d", eg.L1MaxBps), fmt.Sprintf("%d", eg.L2MaxBps)},
@@ -51,12 +51,19 @@ var bpfBandwidthListCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		aa, bb := writer.GetglobalEdtInfo()
+		ingRate, egressRate := writer.GetGlobalRateLimit()
 		_ = pterm.DefaultTable.WithHasHeader().WithData(pterm.TableData{
-			{"edt", "L0", "L1", "L2"},
-			{"rx-max", fmt.Sprintf("%d", aa.L0Bps), fmt.Sprintf("%d", aa.L1Bps), fmt.Sprintf("%d", aa.L2Bps)},
-			{"tx-max", fmt.Sprintf("%d", bb.L0Bps), fmt.Sprintf("%d", bb.L1Bps), fmt.Sprintf("%d", bb.L2Bps)},
-			{"t_last", fmt.Sprintf("%d", bb.L0LastTimestamp), fmt.Sprintf("%d", bb.L1LastTimestamp), fmt.Sprintf("%d", bb.L2LastTimestamp)},
+			{"limit", "L0", "L1", "L2"},
+			{"tx-max", fmt.Sprintf("%d", egressRate.L0Bps), fmt.Sprintf("%d", egressRate.L1Bps), fmt.Sprintf("%d", egressRate.L2Bps)},
+			{"t_last", fmt.Sprintf("%d", egressRate.L0LastTimestamp), fmt.Sprintf("%d", egressRate.L1LastTimestamp), fmt.Sprintf("%d", egressRate.L2LastTimestamp)},
+			{"slot", fmt.Sprintf("%d", egressRate.L0Slot), fmt.Sprintf("%d", egressRate.L1Slot), fmt.Sprintf("%d", egressRate.L2Slot)},
+		}).Render()
+
+		_ = pterm.DefaultTable.WithHasHeader().WithData(pterm.TableData{
+			{"limit", "L0", "L1", "L2"},
+			{"rx-max", fmt.Sprintf("%d", ingRate.L0Bps), fmt.Sprintf("%d", ingRate.L1Bps), fmt.Sprintf("%d", ingRate.L2Bps)},
+			{"t_last", fmt.Sprintf("%d", ingRate.L0LastTimestamp), fmt.Sprintf("%d", ingRate.L1LastTimestamp), fmt.Sprintf("%d", ingRate.L2LastTimestamp)},
+			{"slot", fmt.Sprintf("%d", ingRate.L0Slot), fmt.Sprintf("%d", ingRate.L1Slot), fmt.Sprintf("%d", ingRate.L2Slot)},
 		}).Render()
 
 		data := [][]string{

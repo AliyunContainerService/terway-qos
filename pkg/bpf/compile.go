@@ -29,15 +29,24 @@ const (
 
 var standardCFlags = []string{"-O2", "-target", "bpf", "-std=gnu99"}
 
-func Compile() error {
-	return compile(progName)
+func Compile(enableEDT bool) error {
+	custom := map[string]string{}
+
+	if enableEDT {
+		custom["FEAT_EDT"] = "1"
+	}
+
+	return compile(progName, custom)
 }
 
-func compile(name string) error {
+func compile(name string, custom map[string]string) error {
 	args := make([]string, 0, 16)
 	args = append(args, "-g")
 	args = append(args, standardCFlags...)
 	args = append(args, "-I/var/lib/terway/headers")
+	for k, v := range custom {
+		args = append(args, fmt.Sprintf("-D%s=%s", k, v))
+	}
 	args = append(args, "-c")
 	args = append(args, filepath.Join("/var/lib/terway/src", fmt.Sprintf("%s.c", name)))
 	args = append(args, "-o")

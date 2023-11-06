@@ -133,7 +133,7 @@ var globalRateCetCmd = &cobra.Command{
 			return err
 		}
 		defer writer.Close()
-		_, eg := writer.GetglobalEdtInfo()
+		_, eg := writer.GetGlobalRateLimit()
 		if err != nil {
 			return err
 		}

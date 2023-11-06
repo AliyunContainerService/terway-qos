@@ -19,13 +19,16 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/AliyunContainerService/terway-qos/pkg/version"
 )
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "qos",
-	Short: "Terway QoS",
-	Long:  `Terway QoS`,
+	Use:     "qos",
+	Short:   "Terway QoS",
+	Long:    `Terway QoS`,
+	Version: version.Version,
 }
 
 func Execute() {

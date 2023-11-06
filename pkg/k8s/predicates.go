@@ -54,15 +54,6 @@ func (p *predicateForPod) Update(e event.UpdateEvent) bool {
 }
 
 func (p *predicateForPod) Delete(e event.DeleteEvent) bool {
-	pod, ok := e.Object.(*corev1.Pod)
-	if !ok {
-		return false
-	}
-
-	v4, v6 := getIPs(pod)
-	if !v4.IsValid() && !v6.IsValid() {
-		return false
-	}
-
-	return true
+	_, ok := e.Object.(*corev1.Pod)
+	return ok
 }
