@@ -60,7 +60,7 @@ done
 
 #### No contention scenario
 
-When there is no contention, the "best-effort" business can have a maximum bandwidth of "300Mbps" as defined.
+When there is no contention, the "best-effort" business can have a maximum bandwidth of "300MBps" as defined.
 
 Run the following command to test the bandwidth of "best-effort-0" separately.
 
