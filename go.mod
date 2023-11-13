@@ -3,14 +3,14 @@ module github.com/AliyunContainerService/terway-qos
 go 1.21
 
 require (
-	github.com/cilium/ebpf v0.12.2
+	github.com/cilium/ebpf v0.12.3
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/pterm/pterm v0.12.70
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.17.0
 	github.com/vishvananda/netlink v1.1.0
-	golang.org/x/sys v0.13.0
+	golang.org/x/sys v0.14.1-0.20231108175955-e4099bfacb8c
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f
 	k8s.io/api v0.26.2
 	k8s.io/apimachinery v0.26.2
