@@ -31,7 +31,7 @@ type Interface interface {
 	DeletePodInfo(config *types.PodConfig) error
 
 	ListPodInfo() map[netip.Addr]cgroupInfo
-	GetglobalEdtInfo() (*globalEdtInfo, *globalEdtInfo)
+	GetGlobalRateLimit() (*globalRateInfo, *globalRateInfo)
 
 	WriteCgroupRate(config *types.CgroupRate) error
 	DeleteCgroupRate(inode uint64) error
@@ -39,10 +39,10 @@ type Interface interface {
 }
 
 // rate for current rate and limit
-type edtInfo struct {
-	LimitBps             uint64 `ebpf:"rate"`
-	LastTimeStamp        uint64 `ebpf:"t_last"`
-	HorizonDropTimeStamp uint64 `ebpf:"t_horizon_drop"`
+type rateInfo struct {
+	LimitBps      uint64 `ebpf:"bps"`
+	LastTimeStamp uint64 `ebpf:"t_last"`
+	Slot          uint64 `ebpf:"slot3"`
 }
 
 // addr for both ipv4 and ipv6
@@ -80,17 +80,20 @@ type globalRateCfg struct {
 	L2MaxBps uint64 `ebpf:"l2_max_bps"`
 }
 
-type globalEdtInfo struct {
+type globalRateInfo struct {
 	LastTimestamp uint64 `ebpf:"t_last"`
 
 	L0LastTimestamp uint64 `ebpf:"t_l0_last"`
 	L0Bps           uint64 `ebpf:"l0_bps"`
+	L0Slot          uint64 `ebpf:"l0_slot"`
 
 	L1LastTimestamp uint64 `ebpf:"t_l1_last"`
 	L1Bps           uint64 `ebpf:"l1_bps"`
+	L1Slot          uint64 `ebpf:"l1_slot"`
 
 	L2LastTimestamp uint64 `ebpf:"t_l2_last"`
 	L2Bps           uint64 `ebpf:"l2_bps"`
+	L2Slot          uint64 `ebpf:"l2_slot"`
 }
 
 type netStat struct {

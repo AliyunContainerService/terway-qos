@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"os"
 	"reflect"
 	"time"
 
@@ -28,7 +27,6 @@ import (
 	"github.com/AliyunContainerService/terway-qos/pkg/types"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/rlimit"
 	"k8s.io/apimachinery/pkg/util/sets"
 )
 
@@ -49,37 +47,11 @@ func (w *Writer) Close() {
 }
 
 func NewMap() (*Writer, error) {
-	err := rlimit.RemoveMemlock()
-	if err != nil {
-		return nil, err
-	}
-
-	err = os.MkdirAll(pinPath, os.ModeDir)
-	if err != nil {
-		return nil, err
-	}
-
-	spec, err := ebpf.LoadCollectionSpec(progPath)
-	if err != nil {
-		return nil, err
-	}
-	obj := &qos_tcObjects{}
-	err = spec.LoadAndAssign(obj, &ebpf.CollectionOptions{
-		Maps: ebpf.MapOptions{
-			PinPath:        pinPath,
-			LoadPinOptions: ebpf.LoadPinOptions{},
-		},
-		Programs:        ebpf.ProgramOptions{},
-		MapReplacements: nil,
-	})
-	if err != nil {
-		return nil, err
-	}
 	w := &Writer{
-		obj: obj,
+		obj: getBpfObj(true),
 	}
 
-	return w, err
+	return w, nil
 }
 
 func (w *Writer) GetGlobalConfig() (*types.GlobalConfig, *types.GlobalConfig, error) {
@@ -252,9 +224,9 @@ func (w *Writer) ListPodInfo() map[netip.Addr]cgroupInfo {
 	return result
 }
 
-func (w *Writer) GetglobalEdtInfo() (*globalEdtInfo, *globalEdtInfo) {
-	var ingress = &globalEdtInfo{}
-	var egress = &globalEdtInfo{}
+func (w *Writer) GetGlobalRateLimit() (*globalRateInfo, *globalRateInfo) {
+	var ingress = &globalRateInfo{}
+	var egress = &globalRateInfo{}
 	_ = w.obj.GlobalRateMap.Lookup(ingressIndex, ingress)
 
 	_ = w.obj.GlobalRateMap.Lookup(egressIndex, egress)
@@ -264,7 +236,7 @@ func (w *Writer) GetglobalEdtInfo() (*globalEdtInfo, *globalEdtInfo) {
 func (w *Writer) GetCgroupRateInodes() sets.Set[uint64] {
 	result := sets.New[uint64]()
 	var key cgroupRateID
-	var value edtInfo
+	var value rateInfo
 
 	iter := w.obj.CgroupRateMap.Iterate()
 	for iter.Next(&key, &value) {
@@ -314,7 +286,7 @@ func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
 			log.Info("update rate", "ingress", r.RxBps)
 		}
 	} else {
-		prev := &edtInfo{}
+		prev := &rateInfo{}
 		err := w.obj.CgroupRateMap.Lookup(ingressID, prev)
 		if err != nil {
 			if !errors.Is(err, ebpf.ErrKeyNotExist) {
@@ -326,7 +298,7 @@ func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
 		}
 		log.Info("update rate", "rxBps", r.RxBps)
 
-		err = w.obj.CgroupRateMap.Put(ingressID, &edtInfo{
+		err = w.obj.CgroupRateMap.Put(ingressID, &rateInfo{
 			LimitBps:      r.RxBps,
 			LastTimeStamp: 0,
 		})
@@ -344,7 +316,7 @@ func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
 			log.Info("update rate", "txBps", r.TxBps)
 		}
 	} else {
-		prev := &edtInfo{}
+		prev := &rateInfo{}
 		err := w.obj.CgroupRateMap.Lookup(egressID, prev)
 		if err != nil {
 			if !errors.Is(err, ebpf.ErrKeyNotExist) {
@@ -356,7 +328,7 @@ func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
 		}
 		log.Info("update rate", "txBps", r.TxBps)
 
-		err = w.obj.CgroupRateMap.Put(egressID, &edtInfo{
+		err = w.obj.CgroupRateMap.Put(egressID, &rateInfo{
 			LimitBps:      r.TxBps,
 			LastTimeStamp: 0,
 		})

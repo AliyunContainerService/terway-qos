@@ -35,9 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 type Interface interface {
@@ -68,13 +66,7 @@ func StartPodHandler(ctx context.Context, syncer types.SyncPod) error {
 	}
 
 	err = ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Pod{}).
-		Watches(
-			&source.Kind{
-				Type: &corev1.Pod{},
-			},
-			&handler.EnqueueRequestForObject{},
-			builder.WithPredicates(&predicateForPod{})).
+		For(&corev1.Pod{}, builder.WithPredicates(&predicateForPod{})).
 		Complete(&reconcilePod{
 			client: mgr.GetClient(),
 			syncer: syncer,

@@ -16,46 +16,85 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+	"k8s.io/klog/v2"
+
 	"github.com/AliyunContainerService/terway-qos/pkg/bpf"
 	"github.com/AliyunContainerService/terway-qos/pkg/config"
 	"github.com/AliyunContainerService/terway-qos/pkg/k8s"
+	"github.com/AliyunContainerService/terway-qos/pkg/version"
 
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2/klogr"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+const (
+	enableBPFCORE = "enable-bpf-core"
+	enableIngress = "enable-ingress"
+	enableEgress  = "enable-egress"
+)
+
+func init() {
+	fs := pflag.NewFlagSet("daemon", pflag.PanicOnError)
+	fs.Bool(enableBPFCORE, false, "enable bpf CORE")
+	fs.Bool(enableIngress, false, "enable ingress direction qos")
+	fs.Bool(enableEgress, false, "enable egress direction qos")
+
+	_ = viper.BindPFlags(fs)
+	pflag.CommandLine.AddFlagSet(fs)
+
+	rootCmd.AddCommand(daemonCmd)
+
+	cobra.OnInitialize(initConfig)
+}
+
 var daemonCmd = &cobra.Command{
 	Use:     "daemon",
 	Aliases: []string{"d"},
 	Short:   "start daemon",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := ctrl.SetupSignalHandler()
-		ctrl.SetLogger(klogr.New())
-
-		mgr, err := bpf.NewBpfMgr()
+	Run: func(cmd *cobra.Command, args []string) {
+		klog.Infof("version: %s", version.Version)
+		err := daemon()
 		if err != nil {
-			return err
+			_, _ = fmt.Fprint(os.Stderr, err)
+			os.Exit(1)
 		}
-		err = mgr.Start(ctx)
-		if err != nil {
-			return err
-		}
-		m, err := bpf.NewMap()
-		if err != nil {
-			return err
-		}
-		defer m.Close()
-
-		syncer := config.NewSyncer(m)
-		err = syncer.Start(ctx)
-		if err != nil {
-			return err
-		}
-		return k8s.StartPodHandler(ctx, syncer)
 	},
 }
 
-func init() {
-	rootCmd.AddCommand(daemonCmd)
+func daemon() error {
+	ctx := ctrl.SetupSignalHandler()
+	ctrl.SetLogger(klogr.New())
+
+	mgr, err := bpf.NewBpfMgr(viper.GetBool(enableIngress), viper.GetBool(enableEgress), viper.GetBool(enableBPFCORE))
+	if err != nil {
+		return err
+	}
+	err = mgr.Start(ctx)
+	if err != nil {
+		return err
+	}
+	m, err := bpf.NewMap()
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+
+	syncer := config.NewSyncer(m)
+	err = syncer.Start(ctx)
+	if err != nil {
+		return err
+	}
+	return k8s.StartPodHandler(ctx, syncer)
+}
+
+func initConfig() {
+	if err := viper.ReadInConfig(); err == nil {
+		fmt.Println("Using config file:", viper.ConfigFileUsed())
+	}
 }

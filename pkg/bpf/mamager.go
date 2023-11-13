@@ -17,11 +17,14 @@ package bpf
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net"
 	"os"
+	"sync"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -35,45 +38,88 @@ const (
 	pinPath    = "/sys/fs/bpf/terway"
 )
 
+var objs *qos_tcObjects
+var once sync.Once
+
+func getBpfObj(enableCORE bool) *qos_tcObjects {
+	once.Do(func() {
+		err := rlimit.RemoveMemlock()
+		if err != nil {
+			log.Error(err, "remove memlock failed")
+			os.Exit(1)
+		}
+		err = os.MkdirAll(pinPath, os.ModeDir)
+		if err != nil {
+			log.Error(err, "mkdir failed")
+			os.Exit(1)
+		}
+
+		featEDT := false
+		err = features.HaveProgramHelper(ebpf.SchedCLS, asm.FnSkbEcnSetCe)
+		if err != nil {
+			if !errors.Is(err, ebpf.ErrNotSupported) {
+				log.Error(err, "check kernel version failed")
+				os.Exit(1)
+			}
+		} else {
+			featEDT = true
+		}
+
+		objs = &qos_tcObjects{}
+
+		opts := &ebpf.CollectionOptions{
+			Maps: ebpf.MapOptions{
+				PinPath:        pinPath,
+				LoadPinOptions: ebpf.LoadPinOptions{},
+			},
+			Programs:        ebpf.ProgramOptions{},
+			MapReplacements: nil,
+		}
+
+		if enableCORE {
+			err := loadQos_tcObjects(objs, opts)
+			if err != nil {
+				log.Error(err, "load bpf objects failed")
+				os.Exit(1)
+			}
+		} else {
+			err := Compile(featEDT)
+			if err != nil {
+				log.Error(err, "compile bpf failed")
+				os.Exit(1)
+			}
+
+			spec, err := ebpf.LoadCollectionSpec(progPath)
+			if err != nil {
+				log.Error(err, "load bpf objects failed")
+				os.Exit(1)
+			}
+			err = spec.LoadAndAssign(objs, opts)
+			if err != nil {
+				log.Error(err, "load bpf objects failed")
+				os.Exit(1)
+			}
+		}
+
+	})
+	return objs
+}
+
 type Mgr struct {
 	nlEvent chan netlink.LinkUpdate
+
+	enableIngress, enableEgress bool
 
 	obj *qos_tcObjects
 }
 
-func NewBpfMgr() (*Mgr, error) {
-	err := rlimit.RemoveMemlock()
-	if err != nil {
-		return nil, err
-	}
-	err = Compile()
-	if err != nil {
-		return nil, err
-	}
-
-	err = os.MkdirAll(pinPath, os.ModeDir)
-	if err != nil {
-		return nil, err
-	}
-
-	spec, err := ebpf.LoadCollectionSpec(progPath)
-	if err != nil {
-		return nil, fmt.Errorf("load spec %w", err)
-	}
-	objs := &qos_tcObjects{}
-	err = spec.LoadAndAssign(objs, &ebpf.CollectionOptions{
-		Maps: ebpf.MapOptions{
-			PinPath:        pinPath,
-			LoadPinOptions: ebpf.LoadPinOptions{},
-		},
-		Programs:        ebpf.ProgramOptions{},
-		MapReplacements: nil,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return &Mgr{nlEvent: make(chan netlink.LinkUpdate), obj: objs}, nil
+func NewBpfMgr(enableIngress, enableEgress, enableCORE bool) (*Mgr, error) {
+	return &Mgr{
+		nlEvent:       make(chan netlink.LinkUpdate),
+		obj:           getBpfObj(enableCORE),
+		enableEgress:  enableEgress,
+		enableIngress: enableIngress,
+	}, nil
 }
 
 func (m *Mgr) Start(ctx context.Context) error {
@@ -122,32 +168,64 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 		return err
 	}
 
-	filter := &netlink.BpfFilter{
-		FilterAttrs: netlink.FilterAttrs{
-			LinkIndex: link.Attrs().Index,
-			Parent:    netlink.HANDLE_MIN_EGRESS,
-			Handle:    netlink.MakeHandle(0, 1),
-			Protocol:  unix.ETH_P_ALL,
-			Priority:  90,
-		},
-		Fd:           int(m.obj.qos_tcPrograms.QosProg.FD()),
-		Name:         tcProgName,
-		DirectAction: true,
-	}
-	err = netlink.FilterReplace(filter)
-	if err != nil {
-		return err
+	if m.enableIngress {
+		filter := &netlink.BpfFilter{
+			FilterAttrs: netlink.FilterAttrs{
+				LinkIndex: link.Attrs().Index,
+				Parent:    netlink.HANDLE_MIN_INGRESS,
+				Handle:    netlink.MakeHandle(0, 1),
+				Protocol:  unix.ETH_P_ALL,
+				Priority:  90,
+			},
+			Fd:           int(m.obj.qos_tcPrograms.QosProgIngress.FD()),
+			Name:         tcProgName,
+			DirectAction: true,
+		}
+		err = netlink.FilterReplace(filter)
+		if err != nil {
+			return err
+		}
+
+		log.Info("set bpf ingress", "dev", link.Attrs().Name)
+
+		err = m.obj.QosProgMap.Put(uint32(0), uint32(m.obj.QosCgroup.FD()))
+		if err != nil {
+			return err
+		}
+		err = m.obj.QosProgMap.Put(uint32(1), uint32(m.obj.QosGlobal.FD()))
+		if err != nil {
+			return err
+		}
 	}
 
-	log.Info("set bpf", "dev", link.Attrs().Name)
+	if m.enableEgress {
+		filter := &netlink.BpfFilter{
+			FilterAttrs: netlink.FilterAttrs{
+				LinkIndex: link.Attrs().Index,
+				Parent:    netlink.HANDLE_MIN_EGRESS,
+				Handle:    netlink.MakeHandle(0, 1),
+				Protocol:  unix.ETH_P_ALL,
+				Priority:  90,
+			},
+			Fd:           int(m.obj.qos_tcPrograms.QosProgEgress.FD()),
+			Name:         tcProgName,
+			DirectAction: true,
+		}
+		err = netlink.FilterReplace(filter)
+		if err != nil {
+			return err
+		}
 
-	err = m.obj.QosProgMap.Put(uint32(0), uint32(m.obj.QosCgroup.FD()))
-	if err != nil {
-		return err
-	}
-	err = m.obj.QosProgMap.Put(uint32(1), uint32(m.obj.QosGlobal.FD()))
-	if err != nil {
-		return err
+		log.Info("set bpf egress", "dev", link.Attrs().Name)
+
+		err = m.obj.QosProgMap.Put(uint32(0), uint32(m.obj.QosCgroup.FD()))
+		if err != nil {
+			return err
+		}
+		err = m.obj.QosProgMap.Put(uint32(1), uint32(m.obj.QosGlobal.FD()))
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -177,6 +255,9 @@ func validDevice(link netlink.Link) bool {
 		return false
 	}
 	if dev.Attrs().Flags&net.FlagUp == 0 {
+		return false
+	}
+	if dev.Name == "eth0" {
 		return false
 	}
 	return dev.EncapType != "loopback"

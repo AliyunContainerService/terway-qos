@@ -42,6 +42,8 @@ spec:
           command:
             - 'qos'
             - 'd'
+            - --enable-ingress
+            - --enable-egress
           volumeMounts:
             - mountPath: /sys/fs/bpf
               name: bpffs
