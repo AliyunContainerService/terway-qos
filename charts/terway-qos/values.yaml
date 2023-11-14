@@ -1,7 +1,7 @@
 image:
   repository: registry.cn-hangzhou.aliyuncs.com/acs/terway-qos
   pullPolicy: Always
-  tag: "v0.1.0"
+  tag: "v0.2.0"
 
 imagePullSecrets: []
 nameOverride: ""

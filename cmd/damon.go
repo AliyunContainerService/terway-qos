@@ -17,10 +17,12 @@ package cmd
 
 import (
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"github.com/vishvananda/netlink"
 	"k8s.io/klog/v2"
 
 	"github.com/AliyunContainerService/terway-qos/pkg/bpf"
@@ -34,9 +36,10 @@ import (
 )
 
 const (
-	enableBPFCORE = "enable-bpf-core"
-	enableIngress = "enable-ingress"
-	enableEgress  = "enable-egress"
+	enableBPFCORE     = "enable-bpf-core"
+	enableIngress     = "enable-ingress"
+	enableEgress      = "enable-egress"
+	excludeInterfaces = "exclude-interfaces"
 )
 
 func init() {
@@ -44,6 +47,7 @@ func init() {
 	fs.Bool(enableBPFCORE, false, "enable bpf CORE")
 	fs.Bool(enableIngress, false, "enable ingress direction qos")
 	fs.Bool(enableEgress, false, "enable egress direction qos")
+	fs.StringSlice(excludeInterfaces, []string{}, "network interface names to exclude")
 
 	_ = viper.BindPFlags(fs)
 	pflag.CommandLine.AddFlagSet(fs)
@@ -71,7 +75,7 @@ func daemon() error {
 	ctx := ctrl.SetupSignalHandler()
 	ctrl.SetLogger(klogr.New())
 
-	mgr, err := bpf.NewBpfMgr(viper.GetBool(enableIngress), viper.GetBool(enableEgress), viper.GetBool(enableBPFCORE))
+	mgr, err := bpf.NewBpfMgr(viper.GetBool(enableIngress), viper.GetBool(enableEgress), viper.GetBool(enableBPFCORE), validDevice)
 	if err != nil {
 		return err
 	}
@@ -91,6 +95,24 @@ func daemon() error {
 		return err
 	}
 	return k8s.StartPodHandler(ctx, syncer)
+}
+
+func validDevice(link netlink.Link) bool {
+	dev, ok := link.(*netlink.Device)
+	if !ok {
+		return false
+	}
+	if dev.Attrs().Flags&net.FlagUp == 0 {
+		return false
+	}
+
+	for _, name := range viper.GetStringSlice(excludeInterfaces) {
+		if dev.Name == name {
+			return false
+		}
+	}
+
+	return dev.EncapType != "loopback"
 }
 
 func initConfig() {

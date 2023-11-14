@@ -18,7 +18,6 @@ package bpf
 import (
 	"context"
 	"errors"
-	"net"
 	"os"
 	"sync"
 
@@ -105,20 +104,25 @@ func getBpfObj(enableCORE bool) *qos_tcObjects {
 	return objs
 }
 
+type validateDeviceFunc = func(link netlink.Link) bool
+
 type Mgr struct {
 	nlEvent chan netlink.LinkUpdate
 
 	enableIngress, enableEgress bool
 
 	obj *qos_tcObjects
+
+	validate validateDeviceFunc
 }
 
-func NewBpfMgr(enableIngress, enableEgress, enableCORE bool) (*Mgr, error) {
+func NewBpfMgr(enableIngress, enableEgress, enableCORE bool, validate validateDeviceFunc) (*Mgr, error) {
 	return &Mgr{
 		nlEvent:       make(chan netlink.LinkUpdate),
 		obj:           getBpfObj(enableCORE),
 		enableEgress:  enableEgress,
 		enableIngress: enableIngress,
+		validate:      validate,
 	}, nil
 }
 
@@ -159,7 +163,7 @@ func (m *Mgr) Close() {
 }
 
 func (m *Mgr) ensureBpfProg(link netlink.Link) error {
-	if !validDevice(link) {
+	if !m.validate(link) {
 		return nil
 	}
 
@@ -247,18 +251,4 @@ func ensureQdisc(links []netlink.Link) error {
 		}
 	}
 	return nil
-}
-
-func validDevice(link netlink.Link) bool {
-	dev, ok := link.(*netlink.Device)
-	if !ok {
-		return false
-	}
-	if dev.Attrs().Flags&net.FlagUp == 0 {
-		return false
-	}
-	if dev.Name == "eth0" {
-		return false
-	}
-	return dev.EncapType != "loopback"
 }
