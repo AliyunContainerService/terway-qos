@@ -95,6 +95,7 @@ static __always_inline __u64 get_average_rate(__u32 direction) {
 	__u64 cur_rate = 0;
 	__u32 index    = index_shift(direction);
 
+    #pragma unroll
 	for (i = 0; i < 9; i++) {
 		struct net_stat *info;
 		index += i;
