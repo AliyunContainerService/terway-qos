@@ -276,7 +276,6 @@ func (s *Syncer) syncCgroupRate() error {
 		err = s.bpf.DeleteCgroupRate(id)
 		if err != nil {
 			log.Error(err, "delete cgruop rate failed", "id", strconv.Itoa(int(id)))
-			continue
 		}
 	}
 

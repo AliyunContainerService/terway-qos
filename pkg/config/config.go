@@ -31,18 +31,19 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-var log = ctrl.Log.WithName("config")
-
-const defaultCgroupRoot = "/sys/fs/cgroup/net_cls/kubepods.slice"
-
-var walkPath = []string{"kubepods-burstable.slice", "kubepods-besteffort.slice", "kubepods-guaranteed.slice"}
-var podUIDRe = regexp.MustCompile("[0-9a-fA-F]{8}([-,_][0-9a-fA-F]{4}){3}[-,_][0-9a-fA-F]{12}")
-
-const defaultTTL = 10 * time.Minute
-const maxPodPerNode = 1024
+const (
+	defaultTTL               = 10 * time.Minute
+	maxPodPerNode            = 1024
+	systemdCLSCgroupRootPath = "/sys/fs/cgroup/net_cls/kubepods.slice"
+	defaultCLScgroupRootPath = "/sys/fs/cgroup/net_cls/kubepods"
+)
 
 var (
-	cgroupPathRe = regexp.MustCompile(`^\S+`)
+	log             = ctrl.Log.WithName("config")
+	systemdwalkPath = []string{"kubepods-burstable.slice", "kubepods-besteffort.slice", "kubepods-guaranteed.slice"}
+	defaultwalkPath = []string{"burstable", "besteffort", "guaranteed"}
+	podUIDRe        = regexp.MustCompile("[0-9a-fA-F]{8}([-,_][0-9a-fA-F]{4}){3}[-,_][0-9a-fA-F]{12}")
+	cgroupPathRe    = regexp.MustCompile(`^\S+`)
 )
 
 type Interface interface {
@@ -52,22 +53,35 @@ type Interface interface {
 
 type Cgroup struct {
 	cgroupPath string
+	workPath   []string
 
 	cache *cache.LRUExpireCache
 }
 
 func NewCgroup() *Cgroup {
-	return &Cgroup{
-		cache:      cache.NewLRUExpireCache(maxPodPerNode),
-		cgroupPath: defaultCgroupRoot,
+	fileExists := func(path string) bool {
+		_, err := os.Stat(path)
+		return !os.IsNotExist(err)
 	}
+
+	cg := Cgroup{
+		cache:      cache.NewLRUExpireCache(maxPodPerNode),
+		cgroupPath: defaultCLScgroupRootPath,
+		workPath:   defaultwalkPath,
+	}
+	if fileExists(systemdCLSCgroupRootPath) {
+		cg.cgroupPath = systemdCLSCgroupRootPath
+		cg.workPath = systemdwalkPath
+	}
+
+	return &cg
 }
 
 func (f *Cgroup) GetCgroupByPodUID(id string) (*types.CgroupInfo, error) {
 	v, ok := f.cache.Get(id)
 	if !ok {
 		// update all cache
-		result := getCgroupPath()
+		result := f.getCgroupPath()
 		for uid, info := range result {
 			f.cache.Add(uid, info, defaultTTL)
 		}
@@ -130,10 +144,11 @@ func parseConfig(key string, content string) uint64 {
 	return result
 }
 
-func getCgroupPath() map[string]types.CgroupInfo {
+func (f *Cgroup) getCgroupPath() map[string]types.CgroupInfo {
 	result := map[string]types.CgroupInfo{}
-	for _, p := range walkPath {
-		path := filepath.Join(defaultCgroupRoot, p)
+
+	for _, p := range f.workPath {
+		path := filepath.Join(f.cgroupPath, p)
 		entries, err := os.ReadDir(path)
 		if os.IsNotExist(err) {
 			continue

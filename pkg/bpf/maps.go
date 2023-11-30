@@ -91,8 +91,8 @@ func (w *Writer) GetGlobalConfig() (*types.GlobalConfig, *types.GlobalConfig, er
 		}, nil
 }
 
-func updateIfNotEqual(expect any, lookupo func() (any, error), update func() error) error {
-	prev, err := lookupo()
+func updateIfNotEqual(expect any, idx uint32, lookupo func(idx uint32) (any, error), update func(idx uint32, rateCfg any) error) error {
+	prev, err := lookupo(idx)
 	if err != nil {
 		if !errors.Is(err, ebpf.ErrKeyNotExist) {
 			return err
@@ -102,7 +102,7 @@ func updateIfNotEqual(expect any, lookupo func() (any, error), update func() err
 		return nil
 	}
 
-	return update()
+	return update(idx, expect)
 }
 
 func (w *Writer) WriteGlobalConfig(ingress *types.GlobalConfig, egress *types.GlobalConfig) error {
@@ -136,29 +136,25 @@ func (w *Writer) WriteGlobalConfig(ingress *types.GlobalConfig, egress *types.Gl
 		L2MaxBps:     egress.L2MaxBps,
 	}
 
-	err := updateIfNotEqual(ingressCfg, func() (any, error) {
+	lookRateFunc := func(idx uint32) (any, error) {
 		prev := &globalRateCfg{}
-		err := w.obj.TerwayGlobalCfg.Lookup(ingressIndex, prev)
+		err := w.obj.TerwayGlobalCfg.Lookup(idx, prev)
 		return prev, err
-	}, func() error {
-		log.Info("write global config", "ingress", ingress.String())
+	}
 
-		return w.obj.TerwayGlobalCfg.Put(ingressIndex, ingressCfg)
-	})
+	updateRateFunc := func(idx uint32, rateCfg any) error {
+		idxtostr := map[uint32]string{
+			ingressIndex: "ingress",
+			egressIndex:  "egress",
+		}
+		log.Info("write global config", idxtostr[idx], egress.String())
+		return w.obj.TerwayGlobalCfg.Put(idx, rateCfg)
+	}
 
-	if err != nil {
+	if err := updateIfNotEqual(ingressCfg, ingressIndex, lookRateFunc, updateRateFunc); err != nil {
 		return err
 	}
-	err = updateIfNotEqual(egressCfg, func() (any, error) {
-		prev := &globalRateCfg{}
-		err := w.obj.TerwayGlobalCfg.Lookup(egressIndex, prev)
-		return prev, err
-	}, func() error {
-		log.Info("write global config", "egress", egress.String())
-
-		return w.obj.TerwayGlobalCfg.Put(egressIndex, egressCfg)
-	})
-	return err
+	return updateIfNotEqual(egressCfg, egressIndex, lookRateFunc, updateRateFunc)
 }
 
 func (w *Writer) WritePodInfo(config *types.PodConfig) error {
@@ -193,22 +189,17 @@ func (w *Writer) DeletePodInfo(config *types.PodConfig) error {
 	if config.HostNetwork {
 		return nil
 	}
-	if config.IPv4.IsValid() {
-		err := w.obj.PodMap.Delete(ip2Addr(config.IPv4))
-		if err != nil {
-			if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return fmt.Errorf("error put pod_map map by key %s, %w", config.IPv4, err)
-			}
+
+	ips := []netip.Addr{config.IPv4, config.IPv6}
+	for _, ip := range ips {
+		if !ip.IsValid() {
+			continue
+		}
+		if err := w.obj.PodMap.Delete(ip2Addr(ip)); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			return fmt.Errorf("error put pod_map map by key %s, %w", ip, err)
 		}
 	}
-	if config.IPv6.IsValid() {
-		err := w.obj.PodMap.Delete(ip2Addr(config.IPv6))
-		if err != nil {
-			if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return fmt.Errorf("error delete pod_map map by key %s, %w", config.IPv6, err)
-			}
-		}
-	}
+
 	return nil
 }
 
@@ -246,24 +237,17 @@ func (w *Writer) GetCgroupRateInodes() sets.Set[uint64] {
 }
 
 func (w *Writer) DeleteCgroupRate(inode uint64) error {
-	err := w.obj.CgroupRateMap.Delete(&cgroupRateID{
-		Inode:     inode,
-		Direction: egressIndex,
-	})
-	if err != nil {
-		if !errors.Is(err, ebpf.ErrKeyNotExist) {
+	direction := []uint32{egressIndex, ingressIndex}
+	for _, cur := range direction {
+		obj := &cgroupRateID{
+			Inode:     inode,
+			Direction: cur,
+		}
+		if err := w.obj.CgroupRateMap.Delete(&obj); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 			return err
 		}
 	}
-	err = w.obj.CgroupRateMap.Delete(&cgroupRateID{
-		Inode:     inode,
-		Direction: ingressIndex,
-	})
-	if err != nil {
-		if !errors.Is(err, ebpf.ErrKeyNotExist) {
-			return err
-		}
-	}
+
 	return nil
 }
 
@@ -283,7 +267,7 @@ func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
 				return err
 			}
 		} else {
-			log.Info("update rate", "ingress", r.RxBps)
+			log.Info("delete rate", "ingress", r.RxBps)
 		}
 	} else {
 		prev := &rateInfo{}
@@ -313,7 +297,7 @@ func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
 				return err
 			}
 		} else {
-			log.Info("update rate", "txBps", r.TxBps)
+			log.Info("delete rate", "txBps", r.TxBps)
 		}
 	} else {
 		prev := &rateInfo{}

@@ -147,27 +147,17 @@ func (r *reconcilePod) Reconcile(ctx context.Context, request reconcile.Request)
 }
 
 func getIPs(pod *corev1.Pod) (v4 netip.Addr, v6 netip.Addr) {
-	if len(pod.Status.PodIPs) == 2 {
-		addr, _ := netip.ParseAddr(pod.Status.PodIPs[0].IP)
+	for _, ip := range pod.Status.PodIPs {
+		addr, err := netip.ParseAddr(ip.IP)
+		if err != nil {
+			continue
+		}
 		if addr.Is4() {
 			v4 = addr
 		} else {
 			v6 = addr
 		}
-		addr, _ = netip.ParseAddr(pod.Status.PodIPs[1].IP)
-		if addr.Is4() {
-			v4 = addr
-		} else {
-			v6 = addr
-		}
-	} else {
-		addr, _ := netip.ParseAddr(pod.Status.PodIP)
-		if addr.Is4() {
-			v4 = addr
-			return
-		}
-		v6 = addr
-		return
 	}
+
 	return
 }
