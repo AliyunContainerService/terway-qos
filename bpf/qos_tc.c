@@ -325,6 +325,8 @@ static __always_inline void adjust_rate(const struct global_rate_cfg *cfg, struc
 				WRITE_ONCE(info->l2_bps, (l2_cur - overflow) * MEGABYTE);
 				overflow = 0;
 			}
+		} else {
+			WRITE_ONCE(info->l2_bps, l2_min * MEGABYTE);
 		}
 
 		// suppress l1
@@ -337,6 +339,8 @@ static __always_inline void adjust_rate(const struct global_rate_cfg *cfg, struc
 					WRITE_ONCE(info->l1_bps, (l1_cur - overflow) * MEGABYTE);
 					overflow = 0;
 				}
+			} else {
+				WRITE_ONCE(info->l1_bps, l1_min * MEGABYTE);
 			}
 		}
 
@@ -349,6 +353,8 @@ static __always_inline void adjust_rate(const struct global_rate_cfg *cfg, struc
 				} else {
 					WRITE_ONCE(info->l0_bps, (l0_cur - overflow) * MEGABYTE);
 				}
+			} else {
+				WRITE_ONCE(info->l0_bps, l0_min * MEGABYTE);
 			}
 		}
 	} else {
@@ -364,6 +370,8 @@ static __always_inline void adjust_rate(const struct global_rate_cfg *cfg, struc
 					WRITE_ONCE(info->l0_bps, (l0_cur + overflow) * MEGABYTE); // tx-max | 7899412000000  | 100000000      | 18446744073057000000
 					overflow = 0;
 				}
+			} else {
+				WRITE_ONCE(info->l0_bps, hw_max * MEGABYTE);
 			}
 
 			// recover l1
@@ -376,6 +384,8 @@ static __always_inline void adjust_rate(const struct global_rate_cfg *cfg, struc
 						WRITE_ONCE(info->l1_bps, (l1_cur + overflow) * MEGABYTE);
 						overflow = 0;
 					}
+				} else {
+					WRITE_ONCE(info->l1_bps, l1_max * MEGABYTE);
 				}
 			}
 
@@ -387,6 +397,8 @@ static __always_inline void adjust_rate(const struct global_rate_cfg *cfg, struc
 					} else {
 						WRITE_ONCE(info->l2_bps, (l2_cur + overflow) * MEGABYTE);
 					}
+				} else {
+					WRITE_ONCE(info->l2_bps, l2_max * MEGABYTE);
 				}
 			}
 		}
