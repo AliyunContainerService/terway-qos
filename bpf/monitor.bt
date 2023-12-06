@@ -62,11 +62,13 @@ kprobe:start_xmit
     }
 
     if ($skb->priority ==0) {
-        @l0_bytes = @l0_bytes + $skb->len;
-    } else if ($skb->priority ==1) {
-        @l1_bytes = @l1_bytes + $skb->len;
-    }else if($skb->priority ==2) {
-        @l2_bytes = @l2_bytes + $skb->len;
+        @l0_bytes += $skb->len;
+    }
+    if ($skb->priority ==1) {
+        @l1_bytes += $skb->len;
+    }
+    if ($skb->priority ==2) {
+        @l2_bytes += $skb->len;
     }
 
 }
