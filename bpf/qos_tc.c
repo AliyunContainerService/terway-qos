@@ -52,14 +52,14 @@ static __always_inline void cal_rate(__u64 len, __u32 direction) {
 		WRITE_ONCE(meta->ts, now);
 		WRITE_ONCE(meta->val, 0);
 		index++;
-	} else if ((index + 1) % 10 == 0) {
+	} else if (index % 10 == 0) {
 		index = meta_index + 1;
 	}
 
 	total_bytes = last_bytes + len;
 
 	// aggregate every 100ms for actual bps
-	// as we calculate all packag, this should always be valid...
+	// as we calculate all package, this should always be valid...
 	if ((now - t_last) < 100 * NSEC_PER_MSEC) {
 		WRITE_ONCE(meta->val, total_bytes);
 		return;
@@ -93,12 +93,11 @@ static __always_inline __u64 get_average_rate(__u32 direction) {
 	__u32 i;
 	__u64 now      = bpf_ktime_get_ns();
 	__u64 cur_rate = 0;
-	__u32 index    = index_shift(direction);
 
-    #pragma unroll
+#pragma unroll
 	for (i = 0; i < 9; i++) {
 		struct net_stat *info;
-		index += i;
+		__u32 index = index_shift(direction) + i;
 
 		info = bpf_map_lookup_elem(&terway_net_stat, &index);
 		if (info == NULL)
