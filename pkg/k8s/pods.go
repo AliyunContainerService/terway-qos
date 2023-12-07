@@ -95,13 +95,10 @@ func (r *reconcilePod) Reconcile(ctx context.Context, request reconcile.Request)
 		Name:      request.Name,
 	}, &pod)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if errors.IsNotFound(err) || pod.DeletionTimestamp != nil {
 			return reconcile.Result{}, r.syncer.DeletePod(request.String())
 		}
 		return reconcile.Result{}, err
-	}
-	if !pod.DeletionTimestamp.IsZero() {
-		return reconcile.Result{}, r.syncer.DeletePod(request.String())
 	}
 
 	v4, v6 := getIPs(&pod)
