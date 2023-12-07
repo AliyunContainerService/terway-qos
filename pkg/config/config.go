@@ -40,8 +40,8 @@ const (
 
 var (
 	log             = ctrl.Log.WithName("config")
-	systemdwalkPath = []string{"kubepods-burstable.slice", "kubepods-besteffort.slice", "kubepods-guaranteed.slice"}
-	defaultwalkPath = []string{"burstable", "besteffort", "guaranteed"}
+	systemdwalkPath = []string{"kubepods-burstable.slice", "kubepods-besteffort.slice", "kubepods-guaranteed.slice", ""}
+	defaultwalkPath = []string{"burstable", "besteffort", "guaranteed", ""}
 	podUIDRe        = regexp.MustCompile("[0-9a-fA-F]{8}([-,_][0-9a-fA-F]{4}){3}[-,_][0-9a-fA-F]{12}")
 	cgroupPathRe    = regexp.MustCompile(`^\S+`)
 )
