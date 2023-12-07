@@ -52,7 +52,7 @@ static __always_inline void cal_rate(__u64 len, __u32 direction) {
 		WRITE_ONCE(meta->ts, now);
 		WRITE_ONCE(meta->val, 0);
 		index++;
-	} else if (index % 10 == 0) {
+	} else if ((index + 1) % 10 == 1) {
 		index = meta_index + 1;
 	}
 
