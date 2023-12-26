@@ -39,6 +39,7 @@ const (
 	enableBPFCORE     = "enable-bpf-core"
 	enableIngress     = "enable-ingress"
 	enableEgress      = "enable-egress"
+	enableK8s         = "enable-k8s"
 	excludeInterfaces = "exclude-interfaces"
 )
 
@@ -47,6 +48,7 @@ func init() {
 	fs.Bool(enableBPFCORE, false, "enable bpf CORE")
 	fs.Bool(enableIngress, false, "enable ingress direction qos")
 	fs.Bool(enableEgress, false, "enable egress direction qos")
+	fs.Bool(enableK8s, false, "enable k8s watcher")
 	fs.StringSlice(excludeInterfaces, []string{}, "network interface names to exclude")
 
 	_ = viper.BindPFlags(fs)
@@ -94,7 +96,11 @@ func daemon() error {
 	if err != nil {
 		return err
 	}
-	return k8s.StartPodHandler(ctx, syncer)
+
+	if viper.GetBool(enableK8s) {
+		return k8s.StartPodHandler(ctx, syncer)
+	}
+	return nil
 }
 
 func validDevice(link netlink.Link) bool {

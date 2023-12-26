@@ -45,6 +45,7 @@ spec:
             - 'd'
             - --enable-ingress
             - --enable-egress
+            - --enable-k8s
           volumeMounts:
             - mountPath: /sys/fs/bpf
               name: bpffs

@@ -17,6 +17,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/AliyunContainerService/terway-qos/pkg/bpf"
@@ -37,11 +39,14 @@ const (
 	rootFileConfig  = "/var/lib/terway/qos"
 	perCgroupConfig = "per_cgroup_bps_limit"
 	globalConfig    = "global_bps_config"
+
+	podConfig = "pod_config"
 )
 
 type Syncer struct {
 	globalPath    string
 	perCgroupPath string
+	podConfigPath string
 
 	bpf    bpf.Interface
 	cgroup Interface
@@ -55,6 +60,7 @@ func NewSyncer(bpfWriter bpf.Interface) *Syncer {
 	return &Syncer{
 		globalPath:    filepath.Join(rootFileConfig, globalConfig),
 		perCgroupPath: filepath.Join(rootFileConfig, perCgroupConfig),
+		podConfigPath: filepath.Join(rootFileConfig, podConfig),
 
 		bpf:    bpfWriter,
 		cgroup: NewCgroup(),
@@ -99,25 +105,25 @@ func (s *Syncer) Start(ctx context.Context) error {
 						os.Exit(99)
 					}
 				case s.globalPath, s.perCgroupPath:
+					log.Info("cfg change", "event", event.String())
+
+					if event.Name == s.globalPath {
+						err = s.syncGlobalConfig()
+						if err != nil {
+							log.Error(err, "error sync config")
+						}
+					}
+					if event.Name == s.perCgroupPath {
+						err = s.syncCgroupRate()
+						if err != nil {
+							log.Error(err, "error sync config")
+						}
+					}
+				case s.podConfigPath:
+					s.podsChange()
 				default:
 					continue
 				}
-
-				log.Info("cfg change", "event", event.String())
-
-				if event.Name == s.globalPath {
-					err = s.syncGlobalConfig()
-					if err != nil {
-						log.Error(err, "error sync config")
-					}
-				}
-				if event.Name == s.perCgroupPath {
-					err = s.syncCgroupRate()
-					if err != nil {
-						log.Error(err, "error sync config")
-					}
-				}
-
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
@@ -282,4 +288,50 @@ func (s *Syncer) syncCgroupRate() error {
 
 	// write the info to cgroup
 	return nil
+}
+
+func (s *Syncer) podsChange() {
+	out, err := os.ReadFile(s.podConfigPath)
+	if os.IsNotExist(err) {
+		return
+	}
+	var pods []Pod
+
+	err = json.Unmarshal(out, pods)
+	if err != nil {
+		log.Error(err, "error parse pod config")
+		return
+	}
+
+	s.lock.Lock()
+	wanted := sets.New[string]()
+	exists := sets.New[string](s.podCache.ListKeys()...)
+	s.lock.Unlock()
+
+	for _, pod := range pods {
+		p := toPodConfig(pod)
+		wanted.Insert(p.PodID)
+
+		err = s.UpdatePod(p)
+		if err != nil {
+			log.Error(err, "error add pod config")
+		}
+	}
+
+	for p := range exists.Difference(wanted) {
+		err = s.DeletePod(p)
+		if err != nil {
+			log.Error(err, "error delete pod")
+		}
+	}
+}
+
+func toPodConfig(pod Pod) *types.PodConfig {
+	return &types.PodConfig{
+		PodID:       fmt.Sprintf("%s/%s", pod.PodNamespace, pod.PodName),
+		PodUID:      pod.PodUID,
+		IPv4:        pod.IPv4,
+		IPv6:        pod.IPv6,
+		HostNetwork: pod.HostNetwork,
+	}
 }
