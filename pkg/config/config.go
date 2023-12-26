@@ -25,6 +25,8 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/json"
+
 	"github.com/AliyunContainerService/terway-qos/pkg/types"
 
 	"k8s.io/apimachinery/pkg/util/cache"
@@ -127,6 +129,39 @@ func GetGlobalConfig(path string) (*types.GlobalConfig, *types.GlobalConfig, err
 	ingress.L1MaxBps = parseConfig("offline_l1_rx_bps_max", string(c))
 	ingress.L2MinBps = parseConfig("offline_l2_rx_bps_min", string(c))
 	ingress.L2MaxBps = parseConfig("offline_l2_rx_bps_max", string(c))
+
+	return ingress, egress, nil
+}
+
+func GetGlobalConfigv2(path string) (*types.GlobalConfig, *types.GlobalConfig, error) {
+	c, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ingress := &types.GlobalConfig{}
+	egress := &types.GlobalConfig{}
+
+	n := &Node{}
+	err = json.Unmarshal(c, n)
+	if err != nil {
+		return nil, nil, err
+	}
+	ingress.HwGuaranteed = n.HwRxBpsMax
+	ingress.L0MinBps = n.L0RxBpsMin
+	ingress.L0MaxBps = n.L0RxBpsMax
+	ingress.L1MinBps = n.L1RxBpsMin
+	ingress.L1MaxBps = n.L1RxBpsMax
+	ingress.L2MinBps = n.L2RxBpsMin
+	ingress.L2MaxBps = n.L2RxBpsMax
+
+	egress.HwGuaranteed = n.HwTxBpsMax
+	egress.L0MinBps = n.L0TxBpsMin
+	egress.L0MaxBps = n.L0TxBpsMax
+	egress.L1MinBps = n.L1TxBpsMin
+	egress.L1MaxBps = n.L1TxBpsMax
+	egress.L2MinBps = n.L2TxBpsMin
+	egress.L2MaxBps = n.L2TxBpsMax
 
 	return ingress, egress, nil
 }

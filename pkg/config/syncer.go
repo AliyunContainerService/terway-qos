@@ -17,6 +17,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/AliyunContainerService/terway-qos/pkg/bpf"
@@ -37,11 +39,16 @@ const (
 	rootFileConfig  = "/var/lib/terway/qos"
 	perCgroupConfig = "per_cgroup_bps_limit"
 	globalConfig    = "global_bps_config"
+	globalPathV2    = "node.json"
+
+	podConfig = "pod.json"
 )
 
 type Syncer struct {
 	globalPath    string
+	globalPathV2  string
 	perCgroupPath string
+	podConfigPath string
 
 	bpf    bpf.Interface
 	cgroup Interface
@@ -54,7 +61,9 @@ type Syncer struct {
 func NewSyncer(bpfWriter bpf.Interface) *Syncer {
 	return &Syncer{
 		globalPath:    filepath.Join(rootFileConfig, globalConfig),
+		globalPathV2:  filepath.Join(rootFileConfig, globalPathV2),
 		perCgroupPath: filepath.Join(rootFileConfig, perCgroupConfig),
+		podConfigPath: filepath.Join(rootFileConfig, podConfig),
 
 		bpf:    bpfWriter,
 		cgroup: NewCgroup(),
@@ -98,26 +107,26 @@ func (s *Syncer) Start(ctx context.Context) error {
 						log.Info("config file gone, will restart", "event", event.String())
 						os.Exit(99)
 					}
-				case s.globalPath, s.perCgroupPath:
+				case s.globalPathV2, s.globalPath, s.perCgroupPath:
+					log.Info("cfg change", "event", event.String())
+
+					if event.Name == s.globalPath || event.Name == s.globalPathV2 {
+						err = s.syncGlobalConfig()
+						if err != nil {
+							log.Error(err, "error sync config")
+						}
+					}
+					if event.Name == s.perCgroupPath {
+						err = s.syncCgroupRate()
+						if err != nil {
+							log.Error(err, "error sync config")
+						}
+					}
+				case s.podConfigPath:
+					s.podsChange()
 				default:
 					continue
 				}
-
-				log.Info("cfg change", "event", event.String())
-
-				if event.Name == s.globalPath {
-					err = s.syncGlobalConfig()
-					if err != nil {
-						log.Error(err, "error sync config")
-					}
-				}
-				if event.Name == s.perCgroupPath {
-					err = s.syncCgroupRate()
-					if err != nil {
-						log.Error(err, "error sync config")
-					}
-				}
-
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
@@ -204,13 +213,27 @@ func (s *Syncer) UpdatePod(config *types.PodConfig) error {
 }
 
 func (s *Syncer) syncGlobalConfig() error {
-	ingress, egress, err := GetGlobalConfig(s.globalPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+
+	var ingress, egress *types.GlobalConfig
+	_, err := os.Stat(s.globalPathV2)
+	if err == nil {
+		ingress, egress, err = GetGlobalConfigv2(s.globalPathV2)
+		if err != nil {
+			return err
 		}
-		return err
+	} else {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		ingress, egress, err = GetGlobalConfig(s.globalPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
 	}
+
 	return s.bpf.WriteGlobalConfig(ingress, egress)
 }
 
@@ -282,4 +305,54 @@ func (s *Syncer) syncCgroupRate() error {
 
 	// write the info to cgroup
 	return nil
+}
+
+func (s *Syncer) podsChange() {
+	out, err := os.ReadFile(s.podConfigPath)
+	if os.IsNotExist(err) {
+		return
+	}
+	var pods []Pod
+
+	err = json.Unmarshal(out, &pods)
+	if err != nil {
+		log.Error(err, "error parse pod config")
+		return
+	}
+
+	s.lock.Lock()
+	wanted := sets.New[string]()
+	exists := sets.New[string](s.podCache.ListKeys()...)
+	s.lock.Unlock()
+
+	for _, pod := range pods {
+		p := toPodConfig(pod)
+		wanted.Insert(p.PodID)
+
+		err = s.UpdatePod(p)
+		if err != nil {
+			log.Error(err, "error add pod config")
+		}
+	}
+
+	for p := range exists.Difference(wanted) {
+		err = s.DeletePod(p)
+		if err != nil {
+			log.Error(err, "error delete pod")
+		}
+	}
+}
+
+func toPodConfig(pod Pod) *types.PodConfig {
+	return &types.PodConfig{
+		PodID:  fmt.Sprintf("%s/%s", pod.PodNamespace, pod.PodName),
+		PodUID: pod.PodUID,
+		Prio: func(prio int) *uint32 {
+			v := uint32(prio)
+			return &v
+		}(pod.Prio),
+		IPv4:        pod.IPv4,
+		IPv6:        pod.IPv6,
+		HostNetwork: pod.HostNetwork,
+	}
 }

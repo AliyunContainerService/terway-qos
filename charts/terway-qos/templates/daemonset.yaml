@@ -45,15 +45,18 @@ spec:
             - 'd'
             - --enable-ingress
             - --enable-egress
+            - --enable-k8s
           volumeMounts:
             - mountPath: /sys/fs/bpf
               name: bpffs
-{{/*            - mountPath: /var/lib/terway/qos*/}}
-{{/*              name: config*/}}
+            - mountPath: /var/lib/terway/qos
+              name: global_config
+              subPath: global_bps_config
             - mountPath: /sys/fs/cgroup
               name: cgroupfs
             - mountPath: /var/lib/terway/qos
               name: config
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           env:
@@ -70,7 +73,7 @@ spec:
       tolerations:
         - operator: "Exists"
       volumes:
-        - name: config
+        - name: global_config
           configMap:
             name: terway-qos
             items:
@@ -84,7 +87,7 @@ spec:
           hostPath:
             path: /sys/fs/bpf
             type: "Directory"
-{{/*        - name: config*/}}
-{{/*          hostPath:*/}}
-{{/*            path: /var/lib/terway/qos*/}}
-{{/*            type: "DirectoryOrCreate"*/}}
+        - name: config
+          hostPath:
+            path: /var/lib/terway/qos
+            type: "DirectoryOrCreate"
