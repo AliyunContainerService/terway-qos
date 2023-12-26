@@ -18,6 +18,7 @@ package bpf
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"sync"
 
@@ -172,20 +173,20 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 		return err
 	}
 
+	ingressFilter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_INGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_ALL,
+			Priority:  90,
+		},
+		Fd:           int(m.obj.qos_tcPrograms.QosProgIngress.FD()),
+		Name:         tcProgName,
+		DirectAction: true,
+	}
 	if m.enableIngress {
-		filter := &netlink.BpfFilter{
-			FilterAttrs: netlink.FilterAttrs{
-				LinkIndex: link.Attrs().Index,
-				Parent:    netlink.HANDLE_MIN_INGRESS,
-				Handle:    netlink.MakeHandle(0, 1),
-				Protocol:  unix.ETH_P_ALL,
-				Priority:  90,
-			},
-			Fd:           int(m.obj.qos_tcPrograms.QosProgIngress.FD()),
-			Name:         tcProgName,
-			DirectAction: true,
-		}
-		err = netlink.FilterReplace(filter)
+		err = netlink.FilterReplace(ingressFilter)
 		if err != nil {
 			return err
 		}
@@ -200,22 +201,29 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		err = netlink.FilterDel(ingressFilter)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				log.Error(err, "delete bpf prog failed")
+			}
+		}
 	}
 
+	egressFilter := &netlink.BpfFilter{
+		FilterAttrs: netlink.FilterAttrs{
+			LinkIndex: link.Attrs().Index,
+			Parent:    netlink.HANDLE_MIN_EGRESS,
+			Handle:    netlink.MakeHandle(0, 1),
+			Protocol:  unix.ETH_P_ALL,
+			Priority:  90,
+		},
+		Fd:           int(m.obj.qos_tcPrograms.QosProgEgress.FD()),
+		Name:         tcProgName,
+		DirectAction: true,
+	}
 	if m.enableEgress {
-		filter := &netlink.BpfFilter{
-			FilterAttrs: netlink.FilterAttrs{
-				LinkIndex: link.Attrs().Index,
-				Parent:    netlink.HANDLE_MIN_EGRESS,
-				Handle:    netlink.MakeHandle(0, 1),
-				Protocol:  unix.ETH_P_ALL,
-				Priority:  90,
-			},
-			Fd:           int(m.obj.qos_tcPrograms.QosProgEgress.FD()),
-			Name:         tcProgName,
-			DirectAction: true,
-		}
-		err = netlink.FilterReplace(filter)
+		err = netlink.FilterReplace(egressFilter)
 		if err != nil {
 			return err
 		}
@@ -229,6 +237,13 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 		err = m.obj.QosProgMap.Put(uint32(1), uint32(m.obj.QosGlobal.FD()))
 		if err != nil {
 			return err
+		}
+	} else {
+		err = netlink.FilterDel(egressFilter)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				log.Error(err, "delete bpf prog failed")
+			}
 		}
 	}
 
