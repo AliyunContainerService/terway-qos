@@ -1,7 +1,7 @@
 image:
   repository: registry.cn-hangzhou.aliyuncs.com/acs/terway-qos
   pullPolicy: Always
-  tag: "v0.2.0"
+  tag: "v0.3.0"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -27,3 +27,6 @@ resources:
      memory: 128Mi
 
 affinity: {}
+
+qos:
+  qosConfigSource: k8s
