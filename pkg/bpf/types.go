@@ -19,8 +19,6 @@ import (
 	"net/netip"
 
 	"github.com/AliyunContainerService/terway-qos/pkg/types"
-
-	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 type Interface interface {
@@ -33,9 +31,9 @@ type Interface interface {
 	ListPodInfo() map[netip.Addr]cgroupInfo
 	GetGlobalRateLimit() (*globalRateInfo, *globalRateInfo)
 
+	ListCgroupRate() map[cgroupRateID]rateInfo
 	WriteCgroupRate(config *types.CgroupRate) error
 	DeleteCgroupRate(inode uint64) error
-	GetCgroupRateInodes() sets.Set[uint64]
 }
 
 // rate for current rate and limit

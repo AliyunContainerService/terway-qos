@@ -48,12 +48,11 @@ spec:
           volumeMounts:
             - mountPath: /sys/fs/bpf
               name: bpffs
-{{/*            - mountPath: /var/lib/terway/qos*/}}
-{{/*              name: config*/}}
             - mountPath: /sys/fs/cgroup
               name: cgroupfs
             - mountPath: /var/lib/terway/qos
               name: config
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           env:
@@ -70,12 +69,14 @@ spec:
       tolerations:
         - operator: "Exists"
       volumes:
+{{- if eq .Values.qos.qosConfigSource "k8s" }}
         - name: config
           configMap:
             name: terway-qos
             items:
               - key: global_bps_config
                 path: global_bps_config
+{{- end }}
         - name: cgroupfs
           hostPath:
             path: /sys/fs/cgroup
@@ -84,7 +85,9 @@ spec:
           hostPath:
             path: /sys/fs/bpf
             type: "Directory"
-{{/*        - name: config*/}}
-{{/*          hostPath:*/}}
-{{/*            path: /var/lib/terway/qos*/}}
-{{/*            type: "DirectoryOrCreate"*/}}
+{{- if eq .Values.qos.qosConfigSource "file" }}
+        - name: config
+          hostPath:
+            path: /var/lib/terway/qos
+            type: "DirectoryOrCreate"
+{{- end }}

@@ -17,6 +17,8 @@ package config
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -37,11 +39,13 @@ const (
 	rootFileConfig  = "/var/lib/terway/qos"
 	perCgroupConfig = "per_cgroup_bps_limit"
 	globalConfig    = "global_bps_config"
+	podConfig       = "pod.json"
 )
 
 type Syncer struct {
 	globalPath    string
 	perCgroupPath string
+	podConfigPath string
 
 	bpf    bpf.Interface
 	cgroup Interface
@@ -55,6 +59,7 @@ func NewSyncer(bpfWriter bpf.Interface) *Syncer {
 	return &Syncer{
 		globalPath:    filepath.Join(rootFileConfig, globalConfig),
 		perCgroupPath: filepath.Join(rootFileConfig, perCgroupConfig),
+		podConfigPath: filepath.Join(rootFileConfig, podConfig),
 
 		bpf:    bpfWriter,
 		cgroup: NewCgroup(),
@@ -98,24 +103,23 @@ func (s *Syncer) Start(ctx context.Context) error {
 						log.Info("config file gone, will restart", "event", event.String())
 						os.Exit(99)
 					}
-				case s.globalPath, s.perCgroupPath:
+				case s.globalPath:
+					log.Info("cfg change", "event", event.String())
+
+					err = s.syncGlobalConfig()
+				case s.perCgroupPath:
+					log.Info("cfg change", "event", event.String())
+
+					err = s.syncCgroupRate()
+				case s.podConfigPath:
+					log.Info("cfg change", "event", event.String())
+
+					err = s.syncPodConfig()
 				default:
 					continue
 				}
-
-				log.Info("cfg change", "event", event.String())
-
-				if event.Name == s.globalPath {
-					err = s.syncGlobalConfig()
-					if err != nil {
-						log.Error(err, "error sync config")
-					}
-				}
-				if event.Name == s.perCgroupPath {
-					err = s.syncCgroupRate()
-					if err != nil {
-						log.Error(err, "error sync config")
-					}
+				if err != nil {
+					log.Error(err, "error sync config")
 				}
 
 			case err, ok := <-watcher.Errors:
@@ -129,6 +133,10 @@ func (s *Syncer) Start(ctx context.Context) error {
 					log.Error(err, "error sync config")
 				}
 				err = s.syncCgroupRate()
+				if err != nil {
+					log.Error(err, "error sync config")
+				}
+				err = s.syncPodConfig()
 				if err != nil {
 					log.Error(err, "error sync config")
 				}
@@ -162,6 +170,8 @@ func (s *Syncer) UpdatePod(config *types.PodConfig) error {
 		return err
 	}
 	if ok {
+		log.Info("update pod", "pod", config.PodID)
+
 		prev := v.(*types.PodConfig)
 
 		// keep previous cgroup info
@@ -177,6 +187,7 @@ func (s *Syncer) UpdatePod(config *types.PodConfig) error {
 		}
 	} else {
 		// new pod
+		log.Info("add new pod", "pod", config.PodID)
 		cg, err := s.cgroup.GetCgroupByPodUID(config.PodUID)
 		if err != nil {
 			return err
@@ -211,75 +222,146 @@ func (s *Syncer) syncGlobalConfig() error {
 		}
 		return err
 	}
+
 	return s.bpf.WriteGlobalConfig(ingress, egress)
 }
 
 func (s *Syncer) syncCgroupRate() error {
+	pods, err := s.parsePerCgroupConfig()
+	if err != nil {
+		return err
+	}
+	return s.podChanged(pods)
+}
+
+func (s *Syncer) syncPodConfig() error {
+	pods, err := s.parsePodConfig()
+	if err != nil {
+		return err
+	}
+	return s.podChanged(pods)
+}
+
+func (s *Syncer) podChanged(pods []Pod) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	current := sets.New[uint64]()
+
+	for _, pod := range pods {
+		info, err := readCgroupInfo(pod.CgroupDir)
+		if err != nil {
+			log.Error(err, "error get cgroup info", "path", pod.CgroupDir)
+			continue
+		}
+
+		config := s.podCache.ByCgroupPath(info.Path)
+		if config == nil {
+			log.Info("ignore pod, cgroup not found", "cgroup", info.Path)
+			continue
+		}
+
+		if pod.Prio >= 0 && pod.Prio <= 2 {
+			prio := uint32(pod.Prio)
+			config.Prio = &prio
+			config.CgroupInfo.ClassID = prio
+		}
+		config.RxBps = pod.QoSConfig.IngressBandwidth
+		config.TxBps = pod.QoSConfig.EgressBandwidth
+
+		err = s.podChangeLocked(config)
+		if err != nil {
+			return err
+		}
+	}
+
+	// clean up old cgroup rate
+	cgroups := s.bpf.ListCgroupRate()
+	olds := sets.New[uint64]()
+	for key := range cgroups {
+		olds.Insert(key.Inode)
+	}
+	for id := range olds.Difference(current) {
+		err := s.bpf.DeleteCgroupRate(id)
+		if err != nil {
+			log.Error(err, "delete cgruop rate failed", "id", strconv.Itoa(int(id)))
+		}
+	}
+	return nil
+}
+
+func (s *Syncer) parsePodConfig() ([]Pod, error) {
+	content, err := os.ReadFile(s.podConfigPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	configs := make(map[string]*Pod)
+	err = json.Unmarshal(content, &configs)
+	if err != nil {
+		return nil, err
+	}
+
+	var pods []Pod
+	for _, pod := range configs {
+		pods = append(pods, *pod)
+	}
+
+	return pods, nil
+}
+
+func (s *Syncer) parsePerCgroupConfig() ([]Pod, error) {
 	content, err := os.ReadFile(s.perCgroupPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
+	configs := make([]Pod, 0)
 
 	lines := strings.Split(string(content), "\n")
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	current := sets.New[uint64]()
 	for _, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
 		cgroupPath := cgroupPathRe.FindString(line)
-
-		info, err := readCgroupInfo(cgroupPath)
-		if err != nil {
-			log.Error(err, "error get cgroup info", "path", cgroupPath)
-			continue
-		}
-
 		rx := parseConfig("rx_bps", line)
 		tx := parseConfig("tx_bps", line)
 
-		rate := &types.CgroupRate{
-			Inode: info.Inode,
-			RxBps: rx,
-			TxBps: tx,
-		}
+		configs = append(configs, Pod{
+			PodName:      "",
+			PodNamespace: "",
+			PodUID:       "",
+			Prio:         -1,
+			CgroupDir:    cgroupPath,
+			QoSConfig: QoSConfig{
+				IngressBandwidth: rx,
+				EgressBandwidth:  tx,
+			},
+		})
+	}
+	return configs, nil
+}
 
-		s.lock.Lock()
-		podConfig := s.podCache.ByCgroupPath(info.Path)
-		if podConfig == nil {
-			s.lock.Unlock()
-			continue
-		}
-		podConfig.RxBps = rx
-		podConfig.TxBps = tx
-		err = s.podCache.Update(podConfig)
-		if err != nil {
-			s.lock.Unlock()
-			return err
-		}
-		s.lock.Unlock()
-
-		err = s.bpf.WritePodInfo(podConfig)
-		if err != nil {
-			return err
-		}
-		current.Insert(rate.Inode)
+func (s *Syncer) podChangeLocked(config *types.PodConfig) error {
+	log.Info("update pod", "pod", config.PodID, "detail", fmt.Sprintf("%+v", config), "prio", *config.Prio)
+	err := s.podCache.Update(config)
+	if err != nil {
+		return err
 	}
 
-	olds := s.bpf.GetCgroupRateInodes()
-	for id := range olds.Difference(current) {
-		err = s.bpf.DeleteCgroupRate(id)
+	if config.HostNetwork && config.Prio != nil {
+		err = s.cgroup.SetCgroupClassID(*config.Prio, config.CgroupInfo.Path)
 		if err != nil {
-			log.Error(err, "delete cgruop rate failed", "id", strconv.Itoa(int(id)))
+			return err
 		}
 	}
 
-	// write the info to cgroup
-	return nil
+	return s.bpf.WritePodInfo(config)
 }

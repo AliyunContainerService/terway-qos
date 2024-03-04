@@ -23,11 +23,12 @@ import (
 	"reflect"
 	"time"
 
+	"k8s.io/klog/v2"
+
 	"github.com/AliyunContainerService/terway-qos/pkg/byteorder"
 	"github.com/AliyunContainerService/terway-qos/pkg/types"
 
 	"github.com/cilium/ebpf"
-	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
@@ -178,6 +179,8 @@ func (w *Writer) WritePodInfo(config *types.PodConfig) error {
 			return fmt.Errorf("error put pod_map map, %w", err)
 		}
 	}
+
+	klog.Infof("write pod info, %v", config)
 	return w.WriteCgroupRate(&types.CgroupRate{
 		Inode: config.CgroupInfo.Inode,
 		RxBps: config.RxBps,
@@ -224,14 +227,14 @@ func (w *Writer) GetGlobalRateLimit() (*globalRateInfo, *globalRateInfo) {
 	return ingress, egress
 }
 
-func (w *Writer) GetCgroupRateInodes() sets.Set[uint64] {
-	result := sets.New[uint64]()
+func (w *Writer) ListCgroupRate() map[cgroupRateID]rateInfo {
+	result := make(map[cgroupRateID]rateInfo)
 	var key cgroupRateID
 	var value rateInfo
 
 	iter := w.obj.CgroupRateMap.Iterate()
 	for iter.Next(&key, &value) {
-		result[key.Inode] = struct{}{}
+		result[key] = value
 	}
 	return result
 }
