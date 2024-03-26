@@ -181,10 +181,19 @@ func (w *Writer) WritePodInfo(config *types.PodConfig) error {
 	}
 
 	klog.Infof("write pod info, %v", config)
+	rx := uint64(0)
+	tx := uint64(0)
+	if config.RxBps != nil {
+		rx = *config.RxBps
+	}
+	if config.TxBps != nil {
+		tx = *config.TxBps
+	}
+
 	return w.WriteCgroupRate(&types.CgroupRate{
 		Inode: config.CgroupInfo.Inode,
-		RxBps: config.RxBps,
-		TxBps: config.TxBps,
+		RxBps: rx,
+		TxBps: tx,
 	})
 }
 

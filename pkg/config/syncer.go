@@ -179,10 +179,10 @@ func (s *Syncer) UpdatePod(config *types.PodConfig) error {
 		config.CgroupInfo = prev.CgroupInfo
 
 		// annotation has higher priority
-		if config.TxBps == 0 && prev.TxBps > 0 {
+		if config.TxBps != nil {
 			config.TxBps = prev.TxBps
 		}
-		if config.RxBps == 0 && prev.RxBps > 0 {
+		if config.RxBps != nil {
 			config.RxBps = prev.RxBps
 		}
 	} else {
@@ -266,9 +266,10 @@ func (s *Syncer) podChanged(pods []Pod) error {
 			config.Prio = &prio
 			config.CgroupInfo.ClassID = prio
 		}
-		config.RxBps = pod.QoSConfig.IngressBandwidth
-		config.TxBps = pod.QoSConfig.EgressBandwidth
+		config.RxBps = &pod.QoSConfig.IngressBandwidth
+		config.TxBps = &pod.QoSConfig.EgressBandwidth
 
+		current.Insert(info.Inode)
 		err = s.podChangeLocked(config)
 		if err != nil {
 			return err

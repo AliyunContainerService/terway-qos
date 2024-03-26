@@ -120,10 +120,12 @@ func (r *reconcilePod) Reconcile(ctx context.Context, request reconcile.Request)
 	}
 
 	if ingress != nil {
-		update.RxBps = uint64(ingress.Value())
+		v := uint64(ingress.Value())
+		update.RxBps = &(v)
 	}
 	if egress != nil {
-		update.TxBps = uint64(egress.Value())
+		v := uint64(egress.Value())
+		update.TxBps = &(v)
 	}
 	switch pod.Annotations["k8s.aliyun.com/qos-class"] {
 	case "best-effort":
