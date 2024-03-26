@@ -38,8 +38,8 @@ type PodConfig struct {
 
 	CgroupInfo *CgroupInfo
 
-	RxBps uint64
-	TxBps uint64
+	RxBps *uint64
+	TxBps *uint64
 }
 
 type CgroupInfo struct {

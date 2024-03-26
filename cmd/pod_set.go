@@ -61,6 +61,7 @@ func podSet() error {
 	}
 	defer writer.Close()
 
+	unSet := uint64(0)
 	return writer.WritePodInfo(&types.PodConfig{
 		PodID:       "",
 		PodUID:      "",
@@ -68,8 +69,8 @@ func podSet() error {
 		IPv6:        v6,
 		HostNetwork: false,
 		CgroupInfo:  nil,
-		RxBps:       0,
-		TxBps:       rate,
+		RxBps:       &unSet,
+		TxBps:       &rate,
 	})
 }
 
