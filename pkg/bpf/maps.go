@@ -246,7 +246,7 @@ func (w *Writer) DeleteCgroupRate(inode uint64) error {
 			Inode:     inode,
 			Direction: cur,
 		}
-		if err := w.obj.CgroupRateMap.Delete(&obj); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+		if err := w.obj.CgroupRateMap.Delete(obj); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 			return err
 		}
 	}
