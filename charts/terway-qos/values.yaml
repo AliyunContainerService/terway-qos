@@ -30,3 +30,7 @@ affinity: {}
 
 qos:
   qosConfigSource: k8s
+  enableIngress: true
+  enableEgress: true
+  enableCODR: false
+

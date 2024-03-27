@@ -43,8 +43,16 @@ spec:
           command:
             - 'qos'
             - 'd'
+            {{- if .Values.qos.enableIngress }}
             - --enable-ingress
+            {{- end }}
+            {{- if .Values.qos.enableEgress }}
             - --enable-egress
+            {{- end }}
+            - --enable-ingress
+            {{- if .Values.qos.enableCODR }}
+            - --enable-bpf-core
+            {{- end }}
           volumeMounts:
             - mountPath: /sys/fs/bpf
               name: bpffs
