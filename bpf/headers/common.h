@@ -16,3 +16,7 @@
 #ifndef TC_ACT_SHOT
 # define TC_ACT_SHOT		2
 #endif
+
+#ifndef TC_ACT_PIPE
+# define TC_ACT_PIPE		3
+#endif

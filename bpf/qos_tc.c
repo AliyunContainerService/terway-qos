@@ -416,7 +416,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 
 	void *data_end = (void *)(long)skb->data_end;
 	if (data + sizeof(*l2) > data_end) {
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 	}
 
 	__u32 direction = get_direction(skb);
@@ -426,7 +426,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 		struct iphdr *l3;
 		l3 = (struct iphdr *)(l2 + 1);
 		if ((void *)(l3 + 1) > data_end) {
-			return TC_ACT_OK;
+			return DEFAULT_TC_ACT;
 		}
 		if (direction == INGRESS_TRAFFIC) {
 			addr.d1 = 0;
@@ -446,7 +446,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 		struct ipv6hdr *l3;
 		l3 = (struct ipv6hdr *)(l2 + 1);
 		if ((void *)(l3 + 1) > data_end) {
-			return TC_ACT_OK;
+			return DEFAULT_TC_ACT;
 		}
 
 		if (direction == INGRESS_TRAFFIC) {
@@ -464,7 +464,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 		break;
 	}
 	default:
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 	}
 
 	cal_rate(skb->wire_len, direction);
@@ -502,7 +502,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 	}
 	bpf_tail_call(skb, &qos_prog_map, PROG_TC_GLOBAL);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 }
 
 SEC("tc/qos_global")
@@ -515,7 +515,7 @@ int qos_global(struct __sk_buff *skb) {
 	// load current level rate info
 	g_cfg = bpf_map_lookup_elem(&terway_global_cfg, &direction);
 	if (g_cfg == NULL)
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 
 	g_info = bpf_map_lookup_elem(&global_rate_map, &direction);
 	if (g_info == NULL) {
@@ -529,7 +529,7 @@ int qos_global(struct __sk_buff *skb) {
 			.l2_bps    = g_cfg->l2_max_bps,
 		};
 		bpf_map_update_elem(&global_rate_map, &direction, g_info, BPF_NOEXIST);
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 	}
 
 #ifdef FEAT_EDT
@@ -551,7 +551,7 @@ int qos_global(struct __sk_buff *skb) {
 	}
 	adjust_rate(g_cfg, g_info, direction);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 }
 
 SEC("tc/qos_prog_ingress")
@@ -560,7 +560,7 @@ int qos_prog_ingress(struct __sk_buff *skb) {
 
 	bpf_tail_call(skb, &qos_prog_map, PROG_TC_CGROUP);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 };
 
 SEC("tc/qos_prog_egress")
@@ -569,7 +569,7 @@ int qos_prog_egress(struct __sk_buff *skb) {
 
 	bpf_tail_call(skb, &qos_prog_map, PROG_TC_CGROUP);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 };
 
 char _license[] SEC("license") = "GPL";
