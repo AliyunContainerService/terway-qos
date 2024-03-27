@@ -40,6 +40,7 @@ const (
 	enableIngress     = "enable-ingress"
 	enableEgress      = "enable-egress"
 	excludeInterfaces = "exclude-interfaces"
+	bpfPrio           = "bpf-prio"
 )
 
 func init() {
@@ -48,6 +49,7 @@ func init() {
 	fs.Bool(enableIngress, false, "enable ingress direction qos")
 	fs.Bool(enableEgress, false, "enable egress direction qos")
 	fs.StringSlice(excludeInterfaces, []string{}, "network interface names to exclude")
+	fs.Int(bpfPrio, 90, "tc prio for the qos program")
 
 	_ = viper.BindPFlags(fs)
 	pflag.CommandLine.AddFlagSet(fs)
@@ -75,7 +77,7 @@ func daemon() error {
 	ctx := ctrl.SetupSignalHandler()
 	ctrl.SetLogger(klogr.New())
 
-	mgr, err := bpf.NewBpfMgr(viper.GetBool(enableIngress), viper.GetBool(enableEgress), viper.GetBool(enableBPFCORE), validDevice)
+	mgr, err := bpf.NewBpfMgr(viper.GetBool(enableIngress), viper.GetBool(enableEgress), viper.GetBool(enableBPFCORE), validDevice, viper.GetInt(bpfPrio))
 	if err != nil {
 		return err
 	}
