@@ -27,6 +27,8 @@
 #define PROG_TC_CGROUP 0
 #define PROG_TC_GLOBAL 1
 
+#define DEFAULT_TC_ACT TC_ACT_PIPE
+
 struct rate_info {
 	__u64 bps;
 	__u64 t_last;

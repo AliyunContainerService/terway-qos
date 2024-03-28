@@ -114,16 +114,19 @@ type Mgr struct {
 
 	obj *qos_tcObjects
 
+	prio int
+
 	validate validateDeviceFunc
 }
 
-func NewBpfMgr(enableIngress, enableEgress, enableCORE bool, validate validateDeviceFunc) (*Mgr, error) {
+func NewBpfMgr(enableIngress, enableEgress, enableCORE bool, validate validateDeviceFunc, prio int) (*Mgr, error) {
 	return &Mgr{
 		nlEvent:       make(chan netlink.LinkUpdate),
 		obj:           getBpfObj(enableCORE),
 		enableEgress:  enableEgress,
 		enableIngress: enableIngress,
 		validate:      validate,
+		prio:          prio,
 	}, nil
 }
 
@@ -179,7 +182,7 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 			Parent:    netlink.HANDLE_MIN_INGRESS,
 			Handle:    netlink.MakeHandle(0, 1),
 			Protocol:  unix.ETH_P_ALL,
-			Priority:  90,
+			Priority:  uint16(m.prio),
 		},
 		Fd:           int(m.obj.qos_tcPrograms.QosProgIngress.FD()),
 		Name:         tcProgName,
@@ -216,7 +219,7 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 			Parent:    netlink.HANDLE_MIN_EGRESS,
 			Handle:    netlink.MakeHandle(0, 1),
 			Protocol:  unix.ETH_P_ALL,
-			Priority:  90,
+			Priority:  uint16(m.prio),
 		},
 		Fd:           int(m.obj.qos_tcPrograms.QosProgEgress.FD()),
 		Name:         tcProgName,

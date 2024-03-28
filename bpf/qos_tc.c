@@ -25,6 +25,14 @@ static __always_inline __u32 index_shift(__u32 direction) {
 	return direction * 10;
 }
 
+static __always_inline __u32 ctx_wire_len(struct __sk_buff *skb) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+ 	return skb->wire_len;
+#else
+    return skb->len;
+#endif
+}
+
 // cal_rate cal package transferred
 static __always_inline void cal_rate(__u64 len, __u32 direction) {
 	__u64 now              = bpf_ktime_get_ns();
@@ -146,7 +154,7 @@ static __always_inline int tb_rate_limit(struct __sk_buff *skb, struct rate_info
 	t_last           = READ_ONCE(info->t_last);
 	byte_per_seconds = READ_ONCE(info->bps);
 
-	rt = accept(skb->wire_len, &tokens, &t_last, byte_per_seconds);
+	rt = accept(ctx_wire_len(skb), &tokens, &t_last, byte_per_seconds);
 
 	WRITE_ONCE(info->slot3, tokens);
 	WRITE_ONCE(info->t_last, t_last);
@@ -164,7 +172,7 @@ static __always_inline int global_tb_rate_limit(struct __sk_buff *skb, struct gl
 		t_last           = READ_ONCE(rate_info->t_l0_last);
 		byte_per_seconds = READ_ONCE(rate_info->l0_bps);
 
-		rt = accept(skb->wire_len, &tokens, &t_last, byte_per_seconds);
+		rt = accept(ctx_wire_len(skb), &tokens, &t_last, byte_per_seconds);
 
 		WRITE_ONCE(rate_info->l0_slot, tokens);
 		WRITE_ONCE(rate_info->t_l0_last, t_last);
@@ -179,7 +187,7 @@ static __always_inline int global_tb_rate_limit(struct __sk_buff *skb, struct gl
 		t_last           = READ_ONCE(rate_info->t_l1_last);
 		byte_per_seconds = READ_ONCE(rate_info->l1_bps);
 
-		rt = accept(skb->wire_len, &tokens, &t_last, byte_per_seconds);
+		rt = accept(ctx_wire_len(skb), &tokens, &t_last, byte_per_seconds);
 
 		WRITE_ONCE(rate_info->l1_slot, tokens);
 		WRITE_ONCE(rate_info->t_l1_last, t_last);
@@ -194,7 +202,7 @@ static __always_inline int global_tb_rate_limit(struct __sk_buff *skb, struct gl
 		t_last           = READ_ONCE(rate_info->t_l2_last);
 		byte_per_seconds = READ_ONCE(rate_info->l2_bps);
 
-		rt = accept(skb->wire_len, &tokens, &t_last, byte_per_seconds);
+		rt = accept(ctx_wire_len(skb), &tokens, &t_last, byte_per_seconds);
 
 		WRITE_ONCE(rate_info->l2_slot, tokens);
 		WRITE_ONCE(rate_info->t_l2_last, t_last);
@@ -216,7 +224,7 @@ static __always_inline int edt(struct __sk_buff *skb, struct rate_info *info) {
 	t   = skb->tstamp;
 	if (t < now)
 		t = now;
-	delay  = (__u64)skb->wire_len * NSEC_PER_SEC / info->bps;
+	delay  = (__u64)ctx_wire_len(skb) * NSEC_PER_SEC / info->bps;
 	t_next = READ_ONCE(info->t_last) + delay;
 	if (t_next <= t) {
 		WRITE_ONCE(info->t_last, t);
@@ -241,7 +249,7 @@ static __always_inline int global_edt(struct __sk_buff *skb, struct global_rate_
 		t = now;
 
 	if (skb->priority == PRIO_ONLINE) {
-		delay = (__u64)skb->wire_len * NSEC_PER_SEC / rate_info->l0_bps;
+		delay = (__u64)ctx_wire_len(skb) * NSEC_PER_SEC / rate_info->l0_bps;
 
 		// if t_last is so big  ? ...
 		t_next = READ_ONCE(rate_info->t_l0_last) + delay;
@@ -256,7 +264,7 @@ static __always_inline int global_edt(struct __sk_buff *skb, struct global_rate_
 		WRITE_ONCE(rate_info->t_l0_last, t_next);
 		skb->tstamp = t_next;
 	} else if (skb->priority == PRIO_OFFLINE_L1) {
-		delay  = (__u64)skb->wire_len * NSEC_PER_SEC / rate_info->l1_bps;
+		delay  = (__u64)ctx_wire_len(skb) * NSEC_PER_SEC / rate_info->l1_bps;
 		t_next = rate_info->t_l1_last + delay;
 		if (t_next <= t) {
 			WRITE_ONCE(rate_info->t_l1_last, t);
@@ -268,7 +276,7 @@ static __always_inline int global_edt(struct __sk_buff *skb, struct global_rate_
 		WRITE_ONCE(rate_info->t_l1_last, t_next);
 		skb->tstamp = t_next;
 	} else if (skb->priority == PRIO_OFFLINE_L2) {
-		delay  = (__u64)skb->wire_len * NSEC_PER_SEC / rate_info->l2_bps;
+		delay  = (__u64)ctx_wire_len(skb) * NSEC_PER_SEC / rate_info->l2_bps;
 		t_next = rate_info->t_l2_last + delay;
 		if (t_next <= t) {
 			WRITE_ONCE(rate_info->t_l2_last, t);
@@ -416,7 +424,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 
 	void *data_end = (void *)(long)skb->data_end;
 	if (data + sizeof(*l2) > data_end) {
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 	}
 
 	__u32 direction = get_direction(skb);
@@ -426,7 +434,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 		struct iphdr *l3;
 		l3 = (struct iphdr *)(l2 + 1);
 		if ((void *)(l3 + 1) > data_end) {
-			return TC_ACT_OK;
+			return DEFAULT_TC_ACT;
 		}
 		if (direction == INGRESS_TRAFFIC) {
 			addr.d1 = 0;
@@ -446,7 +454,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 		struct ipv6hdr *l3;
 		l3 = (struct ipv6hdr *)(l2 + 1);
 		if ((void *)(l3 + 1) > data_end) {
-			return TC_ACT_OK;
+			return DEFAULT_TC_ACT;
 		}
 
 		if (direction == INGRESS_TRAFFIC) {
@@ -464,17 +472,19 @@ int qos_cgroup(struct __sk_buff *skb) {
 		break;
 	}
 	default:
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 	}
 
-	cal_rate(skb->wire_len, direction);
+	cal_rate(ctx_wire_len(skb), direction);
 
 	const struct cgroup_info *pod_cgroup_info = NULL;
 
 	pod_cgroup_info = bpf_map_lookup_elem(&pod_map, &addr);
 	if (pod_cgroup_info == NULL) {
-		// set classid as priority for host network pods
-		skb->priority = bpf_skb_cgroup_classid(skb);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+ 		// set classid as priority for host network pods
+ 		skb->priority = bpf_skb_cgroup_classid(skb);
+#endif
 	} else {
 		skb->priority = pod_cgroup_info->class_id;
 
@@ -502,7 +512,7 @@ int qos_cgroup(struct __sk_buff *skb) {
 	}
 	bpf_tail_call(skb, &qos_prog_map, PROG_TC_GLOBAL);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 }
 
 SEC("tc/qos_global")
@@ -515,7 +525,7 @@ int qos_global(struct __sk_buff *skb) {
 	// load current level rate info
 	g_cfg = bpf_map_lookup_elem(&terway_global_cfg, &direction);
 	if (g_cfg == NULL)
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 
 	g_info = bpf_map_lookup_elem(&global_rate_map, &direction);
 	if (g_info == NULL) {
@@ -529,7 +539,7 @@ int qos_global(struct __sk_buff *skb) {
 			.l2_bps    = g_cfg->l2_max_bps,
 		};
 		bpf_map_update_elem(&global_rate_map, &direction, g_info, BPF_NOEXIST);
-		return TC_ACT_OK;
+		return DEFAULT_TC_ACT;
 	}
 
 #ifdef FEAT_EDT
@@ -551,7 +561,7 @@ int qos_global(struct __sk_buff *skb) {
 	}
 	adjust_rate(g_cfg, g_info, direction);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 }
 
 SEC("tc/qos_prog_ingress")
@@ -560,7 +570,7 @@ int qos_prog_ingress(struct __sk_buff *skb) {
 
 	bpf_tail_call(skb, &qos_prog_map, PROG_TC_CGROUP);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 };
 
 SEC("tc/qos_prog_egress")
@@ -569,7 +579,7 @@ int qos_prog_egress(struct __sk_buff *skb) {
 
 	bpf_tail_call(skb, &qos_prog_map, PROG_TC_CGROUP);
 
-	return TC_ACT_OK;
+	return DEFAULT_TC_ACT;
 };
 
 char _license[] SEC("license") = "GPL";
