@@ -49,7 +49,6 @@ spec:
             {{- if .Values.qos.enableEgress }}
             - --enable-egress
             {{- end }}
-            - --enable-ingress
             {{- if .Values.qos.enableCODR }}
             - --enable-bpf-core
             {{- end }}
