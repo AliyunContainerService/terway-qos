@@ -152,6 +152,10 @@ func (s *Syncer) DeletePod(id string) error {
 	defer s.lock.Unlock()
 
 	podConfig := s.podCache.ByPodID(id)
+	if podConfig == nil {
+		return nil
+	}
+
 	if err := s.podCache.DelByPodID(id); err != nil {
 		return err
 	}
