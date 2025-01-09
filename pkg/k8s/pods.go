@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"time"
 
 	"github.com/AliyunContainerService/terway-qos/pkg/bandwidth"
 	"github.com/AliyunContainerService/terway-qos/pkg/types"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -95,10 +97,31 @@ func (r *reconcilePod) Reconcile(ctx context.Context, request reconcile.Request)
 		Name:      request.Name,
 	}, &pod)
 	if err != nil {
-		if errors.IsNotFound(err) || pod.DeletionTimestamp != nil {
+		if errors.IsNotFound(err) {
+			klog.Infof("pod %s/%s has been deleted", request.Namespace, request.Name)
 			return reconcile.Result{}, r.syncer.DeletePod(request.String())
 		}
 		return reconcile.Result{}, err
+	}
+
+	if !pod.DeletionTimestamp.IsZero() {
+		t := time.Since(pod.DeletionTimestamp.Time)
+		if t < 0 {
+			// Reconciliation is level-based, meaning action isn't driven off changes in
+			// individual Events. Requeue the result at least once to make sure the bpf map
+			// will be deleted in time. Because the pod object may exist but its ip address
+			// has been allocated to another pod. e.g. pod deletion is blocked by a
+			// time-consuming finalizer.
+			klog.Infof("pod %s/%s requeue deletion at %s",
+				pod.Namespace, pod.Name, pod.DeletionTimestamp.Time)
+			return reconcile.Result{RequeueAfter: -t}, nil
+		} else {
+			// IP addresses are expected to have been reclaimed
+			// See https://github.com/kubernetes/kubernetes/issues/109414#issuecomment-1125233538
+			klog.Infof("pod %s/%s IP addresses are expected to have been reclaimed",
+				pod.Namespace, pod.Name)
+			return reconcile.Result{}, r.syncer.DeletePod(request.String())
+		}
 	}
 
 	v4, v6 := getIPs(&pod)
