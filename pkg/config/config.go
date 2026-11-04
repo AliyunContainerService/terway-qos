@@ -43,12 +43,12 @@ var (
 	systemdwalkPath = []string{"kubepods-burstable.slice", "kubepods-besteffort.slice", "kubepods-guaranteed.slice", ""}
 	defaultwalkPath = []string{"burstable", "besteffort", "guaranteed", ""}
 	podUIDRe        = regexp.MustCompile("[0-9a-fA-F]{8}([-,_][0-9a-fA-F]{4}){3}[-,_][0-9a-fA-F]{12}")
-	cgroupPathRe    = regexp.MustCompile(`^\S+`)
 )
 
 type Interface interface {
 	GetCgroupByPodUID(string) (*types.CgroupInfo, error)
 	SetCgroupClassID(prio uint32, path string) error
+	ListCgroups() (map[string]types.CgroupInfo, error)
 }
 
 type Cgroup struct {
@@ -81,7 +81,10 @@ func (f *Cgroup) GetCgroupByPodUID(id string) (*types.CgroupInfo, error) {
 	v, ok := f.cache.Get(id)
 	if !ok {
 		// update all cache
-		result := f.getCgroupPath()
+		result, err := f.ListCgroups()
+		if err != nil {
+			return nil, err
+		}
 		for uid, info := range result {
 			f.cache.Add(uid, info, defaultTTL)
 		}
@@ -144,14 +147,21 @@ func parseConfig(key string, content string) uint64 {
 	return result
 }
 
-func (f *Cgroup) getCgroupPath() map[string]types.CgroupInfo {
+func (f *Cgroup) ListCgroups() (map[string]types.CgroupInfo, error) {
 	result := map[string]types.CgroupInfo{}
+	// An unavailable root is not an authoritative empty snapshot.
+	if _, err := os.Stat(f.cgroupPath); err != nil {
+		return nil, err
+	}
 
 	for _, p := range f.workPath {
 		path := filepath.Join(f.cgroupPath, p)
 		entries, err := os.ReadDir(path)
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) && p != "" {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		for _, entry := range entries {
 			if !entry.IsDir() {
@@ -162,15 +172,21 @@ func (f *Cgroup) getCgroupPath() map[string]types.CgroupInfo {
 			if uid == "" {
 				continue
 			}
-			info, err := readCgroupInfo(filepath.Join(path, entry.Name()))
+			cgroupPath := filepath.Join(path, entry.Name())
+			info, err := readCgroupInfo(cgroupPath)
 			if err != nil {
-				log.Error(err, "error read cgroup info")
+				if os.IsNotExist(err) {
+					if _, statErr := os.Stat(cgroupPath); os.IsNotExist(statErr) {
+						continue // The cgroup was removed while scanning.
+					}
+				}
+				return nil, err
 			} else {
 				result[strings.ReplaceAll(uid, "_", "-")] = info
 			}
 		}
 	}
-	return result
+	return result, nil
 }
 
 func readCgroupInfo(path string) (types.CgroupInfo, error) {

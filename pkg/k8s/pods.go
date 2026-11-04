@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -50,33 +51,73 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 }
 
-func StartPodHandler(ctx context.Context, syncer types.SyncPod) error {
-	options := ctrl.Options{
+func podManagerOptions(nodeName string) ctrl.Options {
+	return ctrl.Options{
 		Scheme: scheme,
-	}
-
-	options.NewCache = cache.BuilderWithOptions(cache.Options{
-		SelectorsByObject: cache.SelectorsByObject{
-			&corev1.Pod{}: {
-				Field: fields.SelectorFromSet(fields.Set{"spec.nodeName": os.Getenv("K8S_NODE_NAME")}),
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Pod{}: {
+					Field: fields.SelectorFromSet(fields.Set{"spec.nodeName": nodeName}),
+				},
 			},
-		}},
-	)
-	mgr, err := ctrl.NewManager(config.GetConfigOrDie(), options)
+		},
+	}
+}
+
+func StartPodHandler(ctx context.Context, syncer types.SyncPod) error {
+	mgr, err := ctrl.NewManager(config.GetConfigOrDie(), podManagerOptions(os.Getenv("K8S_NODE_NAME")))
 	if err != nil {
 		return err
 	}
 
-	err = ctrl.NewControllerManagedBy(mgr).
+	if err := registerPodController(mgr, syncer); err != nil {
+		return err
+	}
+	return mgr.Start(ctx)
+}
+
+func registerPodController(mgr ctrl.Manager, syncer types.SyncPod) error {
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}, builder.WithPredicates(&predicateForPod{})).
 		Complete(&reconcilePod{
 			client: mgr.GetClient(),
 			syncer: syncer,
-		})
-	if err != nil {
+		}); err != nil {
 		return err
 	}
-	return mgr.Start(ctx)
+	gc, ok := syncer.(types.PodGarbageCollector)
+	if !ok {
+		return nil
+	}
+	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		if !mgr.GetCache().WaitForCacheSync(ctx) {
+			return nil
+		}
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			if err := prunePodState(ctx, mgr.GetClient(), gc); err != nil {
+				klog.Errorf("pruning orphaned Pod limits: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+			}
+		}
+	}))
+}
+
+func prunePodState(ctx context.Context, reader client.Reader, gc types.PodGarbageCollector) error {
+	pods := &corev1.PodList{}
+	if err := reader.List(ctx, pods); err != nil {
+		return err
+	}
+	live := make(map[string]struct{}, len(pods.Items))
+	for _, pod := range pods.Items {
+		live[string(pod.UID)] = struct{}{}
+	}
+	return gc.PrunePods(live)
 }
 
 // reconcilePod reconciles ReplicaSets
@@ -142,12 +183,13 @@ func (r *reconcilePod) Reconcile(ctx context.Context, request reconcile.Request)
 		HostNetwork: pod.Spec.HostNetwork,
 	}
 
+	// Kubernetes annotations use bits/s; the BPF maps use bytes/s.
 	if ingress != nil {
-		v := uint64(ingress.Value())
+		v := uint64(ingress.Value()) / 8
 		update.RxBps = &(v)
 	}
 	if egress != nil {
-		v := uint64(egress.Value())
+		v := uint64(egress.Value()) / 8
 		update.TxBps = &(v)
 	}
 	switch pod.Annotations["k8s.aliyun.com/qos-class"] {

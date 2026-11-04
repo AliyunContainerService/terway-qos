@@ -31,7 +31,7 @@ import (
 	"github.com/AliyunContainerService/terway-qos/pkg/version"
 
 	"github.com/spf13/cobra"
-	"k8s.io/klog/v2/klogr"
+	"k8s.io/klog/v2/textlogger"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -75,7 +75,7 @@ var daemonCmd = &cobra.Command{
 
 func daemon() error {
 	ctx := ctrl.SetupSignalHandler()
-	ctrl.SetLogger(klogr.New())
+	ctrl.SetLogger(textlogger.NewLogger(textlogger.NewConfig()))
 
 	mgr, err := bpf.NewBpfMgr(viper.GetBool(enableIngress), viper.GetBool(enableEgress), viper.GetBool(enableBPFCORE), validDevice, viper.GetInt(bpfPrio))
 	if err != nil {

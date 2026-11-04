@@ -72,24 +72,24 @@ func (w *Writer) GetGlobalConfig() (*types.GlobalConfig, *types.GlobalConfig, er
 	}
 
 	return &types.GlobalConfig{
-			HwGuaranteed:   ingress.HwGuaranteed,
-			HwBurstableBps: ingress.HwBurstable,
-			L0MaxBps:       0,
-			L0MinBps:       ingress.L0MinBps,
-			L1MaxBps:       ingress.L1MaxBps,
-			L1MinBps:       ingress.L1MinBps,
-			L2MaxBps:       ingress.L2MaxBps,
-			L2MinBps:       ingress.L2MinBps,
-		}, &types.GlobalConfig{
-			HwGuaranteed:   egress.HwGuaranteed,
-			HwBurstableBps: egress.HwBurstable,
-			L0MaxBps:       0,
-			L0MinBps:       egress.L0MinBps,
-			L1MaxBps:       egress.L1MaxBps,
-			L1MinBps:       egress.L1MinBps,
-			L2MaxBps:       egress.L2MaxBps,
-			L2MinBps:       egress.L2MinBps,
-		}, nil
+		HwGuaranteed:   ingress.HwGuaranteed,
+		HwBurstableBps: ingress.HwBurstable,
+		L0MaxBps:       0,
+		L0MinBps:       ingress.L0MinBps,
+		L1MaxBps:       ingress.L1MaxBps,
+		L1MinBps:       ingress.L1MinBps,
+		L2MaxBps:       ingress.L2MaxBps,
+		L2MinBps:       ingress.L2MinBps,
+	}, &types.GlobalConfig{
+		HwGuaranteed:   egress.HwGuaranteed,
+		HwBurstableBps: egress.HwBurstable,
+		L0MaxBps:       0,
+		L0MinBps:       egress.L0MinBps,
+		L1MaxBps:       egress.L1MaxBps,
+		L1MinBps:       egress.L1MinBps,
+		L2MaxBps:       egress.L2MaxBps,
+		L2MinBps:       egress.L2MinBps,
+	}, nil
 }
 
 func updateIfNotEqual(expect any, idx uint32, lookupo func(idx uint32) (any, error), update func(idx uint32, rateCfg any) error) error {
@@ -212,7 +212,7 @@ func (w *Writer) DeletePodInfo(config *types.PodConfig) error {
 		}
 	}
 
-	return nil
+	return w.DeleteCgroupRate(config.CgroupInfo.Inode)
 }
 
 func (w *Writer) ListPodInfo() map[netip.Addr]cgroupInfo {
@@ -263,76 +263,52 @@ func (w *Writer) DeleteCgroupRate(inode uint64) error {
 	return nil
 }
 
-func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
-	egressID := &cgroupRateID{
-		Inode:     r.Inode,
-		Direction: egressIndex,
-	}
-	ingressID := &cgroupRateID{
-		Inode:     r.Inode,
-		Direction: ingressIndex,
-	}
-	if r.RxBps == 0 {
-		err := w.obj.CgroupRateMap.Delete(ingressID)
-		if err != nil {
-			if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
-		} else {
-			log.Info("delete rate", "ingress", r.RxBps)
-		}
-	} else {
-		prev := &rateInfo{}
-		err := w.obj.CgroupRateMap.Lookup(ingressID, prev)
-		if err != nil {
-			if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
-		}
-		if prev.LimitBps == r.RxBps {
-			return nil
-		}
-		log.Info("update rate", "rxBps", r.RxBps)
-
-		err = w.obj.CgroupRateMap.Put(ingressID, &rateInfo{
-			LimitBps:      r.RxBps,
-			LastTimeStamp: 0,
-		})
-		if err != nil {
-			return err
+// PruneCgroupRates first reads the complete map, then removes both directions
+// for orphaned inodes. Iteration failure must never trigger partial cleanup.
+func (w *Writer) PruneCgroupRates(keep map[uint64]struct{}) error {
+	stale := make(map[uint64]struct{})
+	var key cgroupRateID
+	var value rateInfo
+	iter := w.obj.CgroupRateMap.Iterate()
+	for iter.Next(&key, &value) {
+		if _, ok := keep[key.Inode]; !ok {
+			stale[key.Inode] = struct{}{}
 		}
 	}
-	if r.TxBps == 0 {
-		err := w.obj.CgroupRateMap.Delete(egressID)
-		if err != nil {
-			if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
-		} else {
-			log.Info("delete rate", "txBps", r.TxBps)
-		}
-	} else {
-		prev := &rateInfo{}
-		err := w.obj.CgroupRateMap.Lookup(egressID, prev)
-		if err != nil {
-			if !errors.Is(err, ebpf.ErrKeyNotExist) {
-				return err
-			}
-		}
-		if prev.LimitBps == r.TxBps {
-			return nil
-		}
-		log.Info("update rate", "txBps", r.TxBps)
-
-		err = w.obj.CgroupRateMap.Put(egressID, &rateInfo{
-			LimitBps:      r.TxBps,
-			LastTimeStamp: 0,
-		})
-		if err != nil {
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	for inode := range stale {
+		if err := w.DeleteCgroupRate(inode); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (w *Writer) WriteCgroupRate(r *types.CgroupRate) error {
+	if err := w.writeDirectionRate(r.Inode, ingressIndex, r.RxBps); err != nil {
+		return err
+	}
+	return w.writeDirectionRate(r.Inode, egressIndex, r.TxBps)
+}
+
+func (w *Writer) writeDirectionRate(inode uint64, direction uint32, limit uint64) error {
+	id := &cgroupRateID{Inode: inode, Direction: direction}
+	if limit == 0 {
+		if err := w.obj.CgroupRateMap.Delete(id); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			return err
+		}
+		return nil
+	}
+	prev := &rateInfo{}
+	if err := w.obj.CgroupRateMap.Lookup(id, prev); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+		return err
+	}
+	if prev.LimitBps == limit {
+		return nil
+	}
+	return w.obj.CgroupRateMap.Put(id, &rateInfo{LimitBps: limit})
 }
 
 func (w *Writer) GetNetStat() []netStat {

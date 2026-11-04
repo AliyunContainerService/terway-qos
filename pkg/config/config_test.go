@@ -16,7 +16,11 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/util/cache"
 )
 
 func Test_parseConfig(t *testing.T) {
@@ -61,5 +65,55 @@ offline_l2_rx_bps_max 30`
 				t.Errorf("parseConfig() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestListCgroupsBypassesLookupCache(t *testing.T) {
+	dir := t.TempDir()
+	uid := "12345678-1234-1234-1234-123456789abc"
+	path := filepath.Join(dir, "pod"+uid)
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, filepath.Join(path, "net_cls.classid"), "0")
+	cg := &Cgroup{cgroupPath: dir, workPath: []string{"burstable", ""}, cache: cache.NewLRUExpireCache(10)}
+	info, err := cg.GetCgroupByPodUID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := cg.ListCgroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("stale cgroup inode %d survived fresh scan", info.Inode)
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cg.ListCgroups(); err == nil {
+		t.Fatal("missing root treated as empty snapshot")
+	}
+}
+
+func TestListCgroupsRejectsIncompleteScan(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pod12345678-1234-1234-1234-123456789abc")
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, filepath.Join(path, "net_cls.classid"), "invalid")
+	cg := &Cgroup{cgroupPath: dir, workPath: []string{""}}
+	if _, err := cg.ListCgroups(); err == nil {
+		t.Fatal("accepted partial cgroup scan")
+	}
+	if err := os.Remove(filepath.Join(path, "net_cls.classid")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cg.ListCgroups(); err == nil {
+		t.Fatal("missing classid file treated as a removed cgroup")
 	}
 }

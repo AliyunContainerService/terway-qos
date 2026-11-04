@@ -90,6 +90,29 @@ Supports hot update of annotations to adjust Pod bandwidth limitation.
 Please note that the CNI plugin may also support Kubernetes standard annotations, which may affect the hot update. In
 this case, you can choose to disable the bandwidth limitation feature of the CNI plugin.
 
+Annotations use bits/s (for example, `80M` means 10,000,000 Bytes/s); file configuration uses Bytes/s.
+For each bandwidth direction and priority, annotations take precedence over `pod.json`, which takes precedence over
+`per_cgroup_bps_limit` for the same cgroup path. Removing an annotation restores the file value; removing a file
+preserves settings from other sources. Invalid file configuration retains the last valid snapshot.
+
+## Testing
+
+Use Go 1.27.3. The project uses Kubernetes libraries v0.37.2 with controller-runtime v0.25.2.
+
+Run `go test -race ./...` on Linux. To also load BPF programs and test real kernel maps, run
+`TERWAY_QOS_BPF_TEST=1 go test -race ./...` with BPF privileges. These tests use unpinned maps and do not attach programs
+to network interfaces.
+
+To test the controller against an isolated Kubernetes API server and etcd, install the test binaries and run:
+
+```sh
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
+export KUBEBUILDER_ASSETS="$(setup-envtest use 1.37.x -p path)"
+make test-api
+```
+
+This checks node filtering, Pod creation/deletion, and annotation changes without using an existing cluster.
+
 ## License
 
 terway-qos developed by Alibaba Group and licensed under the Apache License (Version 2.0)

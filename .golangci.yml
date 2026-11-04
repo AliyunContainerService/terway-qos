@@ -1,30 +1,25 @@
+version: "2"
 run:
   concurrency: 4
   timeout: 5m
-  tests: false
-  build-tags: []
-
-issues:
-  exclude-rules:
-  - path: _test\.go
-    linters:
-    - dupl
-    - goconst
+  tests: true
 linters:
+  default: none
   enable:
-  - goconst
-  - goimports
-  - govet
-  - errcheck
-  - ineffassign
-  - staticcheck
-  - goconst
-  - stylecheck
-  - misspell
-linters-settings:
-  errcheck:
-    check-blank: false
-  govet:
-    check-shadowing: false
-  maligned:
-    suggest-new: true
+    - errcheck
+    - goconst
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - goconst
+  settings:
+    errcheck:
+      check-blank: false
+formatters:
+  enable:
+    - goimports

@@ -101,20 +101,20 @@ func (r *PodCache) ByCgroupPath(id string) *types.PodConfig {
 }
 
 func (r *PodCache) AddIfNotPresent(config *types.PodConfig) error {
-	_, ok, err := r.Indexer.Get(config)
+	_, ok, err := r.Get(config)
 	if err != nil {
 		return err
 	}
 	if ok {
 		return nil
 	}
-	return r.Indexer.Add(config)
+	return r.Add(config)
 }
 
 func (r *PodCache) Del(config *types.PodConfig) error {
-	return r.Indexer.Delete(config)
+	return r.Delete(config)
 }
 
 func (r *PodCache) DelByPodID(id string) error {
-	return r.Indexer.Delete(&types.PodConfig{PodID: id})
+	return r.Delete(&types.PodConfig{PodID: id})
 }

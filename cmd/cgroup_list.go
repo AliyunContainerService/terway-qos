@@ -26,7 +26,7 @@ import (
 )
 
 var cgroupListCmd = &cobra.Command{
-	Use: "list",
+	Use: listCommand,
 	Run: func(cmd *cobra.Command, args []string) {
 		err := cgroupList()
 		if err != nil {

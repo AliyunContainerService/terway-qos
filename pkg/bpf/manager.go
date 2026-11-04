@@ -162,7 +162,7 @@ func (m *Mgr) Start(ctx context.Context) error {
 
 func (m *Mgr) Close() {
 	if m.obj != nil {
-		m.obj.Close()
+		_ = m.obj.Close()
 	}
 }
 
@@ -184,7 +184,7 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 			Protocol:  unix.ETH_P_ALL,
 			Priority:  uint16(m.prio),
 		},
-		Fd:           int(m.obj.qos_tcPrograms.QosProgIngress.FD()),
+		Fd:           int(m.obj.QosProgIngress.FD()),
 		Name:         tcProgName,
 		DirectAction: true,
 	}
@@ -221,7 +221,7 @@ func (m *Mgr) ensureBpfProg(link netlink.Link) error {
 			Protocol:  unix.ETH_P_ALL,
 			Priority:  uint16(m.prio),
 		},
-		Fd:           int(m.obj.qos_tcPrograms.QosProgEgress.FD()),
+		Fd:           int(m.obj.QosProgEgress.FD()),
 		Name:         tcProgName,
 		DirectAction: true,
 	}
