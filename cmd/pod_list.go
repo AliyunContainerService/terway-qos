@@ -26,7 +26,7 @@ import (
 )
 
 var podListCmd = &cobra.Command{
-	Use: "list",
+	Use: listCommand,
 	Run: func(cmd *cobra.Command, args []string) {
 		err := podList()
 		if err != nil {

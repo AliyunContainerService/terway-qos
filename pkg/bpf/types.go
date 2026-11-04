@@ -34,6 +34,7 @@ type Interface interface {
 	ListCgroupRate() map[cgroupRateID]rateInfo
 	WriteCgroupRate(config *types.CgroupRate) error
 	DeleteCgroupRate(inode uint64) error
+	PruneCgroupRates(keep map[uint64]struct{}) error
 }
 
 // rate for current rate and limit

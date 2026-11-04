@@ -26,7 +26,7 @@ import (
 )
 
 var bpfBandwidthListCmd = &cobra.Command{
-	Use: "list",
+	Use: listCommand,
 	Run: func(cmd *cobra.Command, args []string) {
 		writer, err := bpf.NewMap()
 		if err != nil {

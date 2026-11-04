@@ -78,6 +78,25 @@ data:
 
 支持热更新 Annotation 来调整 Pod 带宽限制
 
+Annotation 的单位为 bit/s（例如 `80M` 对应 10,000,000 Bytes/s），文件配置使用 Bytes/s。
+同一个 cgroup 的带宽按方向独立取值，带宽和优先级的来源顺序为 Annotation、`pod.json`、`per_cgroup_bps_limit`。
+删除 Annotation 后回退到文件配置；删除某个文件不会删除其他来源的配置。文件配置无效时保留上一次有效快照。
+
+使用 Go 1.27.3，Kubernetes 依赖为 v0.37.2，controller-runtime 为 v0.25.2。
+在 Linux 上运行 `go test -race ./...`。具备 BPF 权限时，使用
+`TERWAY_QOS_BPF_TEST=1 go test -race ./...` 验证真实内核 maps 和程序加载。
+这些测试使用未固定的 maps，不会把程序挂载到网卡。
+
+使用独立 API Server 和 etcd 验证节点过滤、Pod 创建/删除和 Annotation 更新：
+
+```sh
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.25.2
+export KUBEBUILDER_ASSETS="$(setup-envtest use 1.37.x -p path)"
+make test-api
+```
+
+这些测试不会连接现有集群。
+
 需注意，CNI 插件可能支持 Kubernetes 标准的 Annotation ，从而会影响热更新，这种情况下可以选择关闭 CNI 插件的带宽限制功能。
 
 ## 快速开始

@@ -25,6 +25,12 @@ type SyncPod interface {
 	UpdatePod(config *PodConfig) error
 }
 
+// PodGarbageCollector uses a complete node-local Pod snapshot, including Pods
+// whose initial reconciliation has not completed yet.
+type PodGarbageCollector interface {
+	PrunePods(liveUIDs map[string]struct{}) error
+}
+
 // PodConfig contain pod related resource
 type PodConfig struct {
 	PodID  string

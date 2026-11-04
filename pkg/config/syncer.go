@@ -27,13 +27,13 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/AliyunContainerService/terway-qos/pkg/bpf"
 	"github.com/AliyunContainerService/terway-qos/pkg/types"
 )
 
 var _ types.SyncPod = &Syncer{}
+var _ types.PodGarbageCollector = &Syncer{}
 
 const (
 	rootFileConfig  = "/var/lib/terway/qos"
@@ -51,6 +51,8 @@ type Syncer struct {
 	cgroup Interface
 
 	podCache *PodCache
+	// File configuration is kept separate from annotation-derived pod state.
+	filePods map[string]Pod
 
 	lock sync.Mutex
 }
@@ -69,7 +71,7 @@ func NewSyncer(bpfWriter bpf.Interface) *Syncer {
 }
 
 func (s *Syncer) Start(ctx context.Context) error {
-	err := os.MkdirAll(rootFileConfig, os.ModeDir)
+	err := os.MkdirAll(rootFileConfig, 0755)
 	if err != nil {
 		return err
 	}
@@ -81,17 +83,21 @@ func (s *Syncer) Start(ctx context.Context) error {
 	log.Info("watching config change", "path", rootFileConfig)
 	err = watcher.Add(rootFileConfig)
 	if err != nil {
+		_ = watcher.Close()
 		return err
+	}
+	if err := s.syncFilePods(); err != nil {
+		log.Error(err, "error loading initial pod configuration")
 	}
 
 	go func() {
 		tick := time.NewTicker(5 * time.Second)
 
-		defer watcher.Close()
+		defer func() { _ = watcher.Close() }()
+		defer tick.Stop()
 		for {
 			select {
 			case <-ctx.Done():
-				tick.Stop()
 				return
 			case event, ok := <-watcher.Events:
 				if !ok {
@@ -136,10 +142,6 @@ func (s *Syncer) Start(ctx context.Context) error {
 				if err != nil {
 					log.Error(err, "error sync config")
 				}
-				err = s.syncPodConfig()
-				if err != nil {
-					log.Error(err, "error sync config")
-				}
 			}
 		}
 	}()
@@ -156,24 +158,46 @@ func (s *Syncer) DeletePod(id string) error {
 		return nil
 	}
 
-	if err := s.podCache.DelByPodID(id); err != nil {
+	if err := s.bpf.DeletePodInfo(podConfig); err != nil {
 		return err
 	}
+	return s.podCache.DelByPodID(id)
+}
 
-	return s.bpf.DeletePodInfo(podConfig)
+func (s *Syncer) PrunePods(liveUIDs map[string]struct{}) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	// Bypass the cgroup lookup TTL: stale cached inodes cannot establish liveness.
+	cgroups, err := s.cgroup.ListCgroups()
+	if err != nil {
+		return err
+	}
+	keep := make(map[uint64]struct{})
+	for uid, cg := range cgroups {
+		if _, live := liveUIDs[uid]; live {
+			keep[cg.Inode] = struct{}{}
+		}
+	}
+	// Reconciliation may have added Pods after the API snapshot was listed.
+	for _, obj := range s.podCache.List() {
+		keep[obj.(*types.PodConfig).CgroupInfo.Inode] = struct{}{}
+	}
+	return s.bpf.PruneCgroupRates(keep)
 }
 
 func (s *Syncer) UpdatePod(config *types.PodConfig) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	prio := config.Prio
-
+	// Do not mutate caller-owned objects or the cached cgroup baseline.
+	copyConfig := *config
+	config = &copyConfig
 	v, ok, err := s.podCache.Get(config)
 	if err != nil {
 		return err
 	}
-	if ok {
+	if ok && v.(*types.PodConfig).PodUID == config.PodUID {
 		log.Info("update pod", "pod", config.PodID)
 
 		prev := v.(*types.PodConfig)
@@ -181,13 +205,10 @@ func (s *Syncer) UpdatePod(config *types.PodConfig) error {
 		// keep previous cgroup info
 		// take only single source
 		config.CgroupInfo = prev.CgroupInfo
-
-		// annotation has higher priority
-		if config.TxBps != nil {
-			config.TxBps = prev.TxBps
-		}
-		if config.RxBps != nil {
-			config.RxBps = prev.RxBps
+		if config.IPv4 != prev.IPv4 || config.IPv6 != prev.IPv6 {
+			if err := s.bpf.DeletePodInfo(prev); err != nil {
+				return err
+			}
 		}
 	} else {
 		// new pod
@@ -197,25 +218,17 @@ func (s *Syncer) UpdatePod(config *types.PodConfig) error {
 			return err
 		}
 		config.CgroupInfo = cg
-	}
-
-	if prio != nil && *prio <= 2 {
-		config.CgroupInfo.ClassID = *prio
-	}
-
-	err = s.podCache.Update(config)
-	if err != nil {
-		return err
-	}
-
-	if config.HostNetwork && config.Prio != nil {
-		err = s.cgroup.SetCgroupClassID(*config.Prio, config.CgroupInfo.Path)
-		if err != nil {
-			return err
+		if ok {
+			if err := s.bpf.DeletePodInfo(v.(*types.PodConfig)); err != nil {
+				return err
+			}
 		}
 	}
 
-	return s.bpf.WritePodInfo(config)
+	if err := s.podChangeLocked(config); err != nil {
+		return err
+	}
+	return s.podCache.Update(config)
 }
 
 func (s *Syncer) syncGlobalConfig() error {
@@ -231,65 +244,44 @@ func (s *Syncer) syncGlobalConfig() error {
 }
 
 func (s *Syncer) syncCgroupRate() error {
+	return s.syncFilePods()
+}
+
+func (s *Syncer) syncPodConfig() error {
+	return s.syncFilePods()
+}
+
+func (s *Syncer) syncFilePods() error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	// Read both sources before applying either, so a missing file cannot erase
+	// another source's limits. Invalid input leaves the last snapshot intact.
 	pods, err := s.parsePerCgroupConfig()
 	if err != nil {
 		return err
 	}
-	return s.podChanged(pods)
-}
-
-func (s *Syncer) syncPodConfig() error {
-	pods, err := s.parsePodConfig()
+	jsonPods, err := s.parsePodConfig()
 	if err != nil {
 		return err
 	}
-	return s.podChanged(pods)
-}
-
-func (s *Syncer) podChanged(pods []Pod) error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-
-	current := sets.New[uint64]()
-
+	files := make(map[string]Pod)
+	// pod.json overrides the legacy per-cgroup file for matching paths.
+	pods = append(pods, jsonPods...)
 	for _, pod := range pods {
-		info, err := readCgroupInfo(pod.CgroupDir)
-		if err != nil {
-			log.Error(err, "error get cgroup info", "path", pod.CgroupDir)
-			continue
+		path := filepath.Clean(pod.CgroupDir)
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf("cgroup path must be absolute: %q", pod.CgroupDir)
 		}
-
-		config := s.podCache.ByCgroupPath(info.Path)
-		if config == nil {
-			log.Info("ignore pod, cgroup not found", "cgroup", info.Path)
-			continue
+		if pod.Prio < -1 || pod.Prio > 2 {
+			return fmt.Errorf("invalid pod priority: %d", pod.Prio)
 		}
-
-		if pod.Prio >= 0 && pod.Prio <= 2 {
-			prio := uint32(pod.Prio)
-			config.Prio = &prio
-			config.CgroupInfo.ClassID = prio
-		}
-		config.RxBps = &pod.QoSConfig.IngressBandwidth
-		config.TxBps = &pod.QoSConfig.EgressBandwidth
-
-		current.Insert(info.Inode)
-		err = s.podChangeLocked(config)
-		if err != nil {
+		files[path] = pod
+	}
+	s.filePods = files
+	for _, obj := range s.podCache.List() {
+		if err := s.podChangeLocked(obj.(*types.PodConfig)); err != nil {
 			return err
-		}
-	}
-
-	// clean up old cgroup rate
-	cgroups := s.bpf.ListCgroupRate()
-	olds := sets.New[uint64]()
-	for key := range cgroups {
-		olds.Insert(key.Inode)
-	}
-	for id := range olds.Difference(current) {
-		err := s.bpf.DeleteCgroupRate(id)
-		if err != nil {
-			log.Error(err, "delete cgruop rate failed", "id", strconv.Itoa(int(id)))
 		}
 	}
 	return nil
@@ -310,7 +302,16 @@ func (s *Syncer) parsePodConfig() ([]Pod, error) {
 	}
 
 	var pods []Pod
+	seen := make(map[string]bool)
 	for _, pod := range configs {
+		if pod == nil {
+			return nil, fmt.Errorf("pod config must not be null")
+		}
+		path := filepath.Clean(pod.CgroupDir)
+		if seen[path] {
+			return nil, fmt.Errorf("duplicate cgroup path: %q", path)
+		}
+		seen[path] = true
 		pods = append(pods, *pod)
 	}
 
@@ -328,26 +329,40 @@ func (s *Syncer) parsePerCgroupConfig() ([]Pod, error) {
 	configs := make([]Pod, 0)
 
 	lines := strings.Split(string(content), "\n")
-	if err != nil {
-		return nil, err
-	}
-	for _, line := range lines {
-		if len(line) == 0 {
+	for lineNumber, line := range lines {
+		line = strings.TrimSpace(line)
+		if len(line) == 0 || strings.HasPrefix(line, "#") {
 			continue
 		}
-		cgroupPath := cgroupPathRe.FindString(line)
-		rx := parseConfig("rx_bps", line)
-		tx := parseConfig("tx_bps", line)
+		fields := strings.Fields(strings.ReplaceAll(line, "=", " "))
+		if len(fields)%2 != 1 {
+			return nil, fmt.Errorf("invalid cgroup configuration on line %d", lineNumber+1)
+		}
+		rates := make(map[string]uint64)
+		for i := 1; i < len(fields); i += 2 {
+			key := fields[i]
+			if key != "rx_bps" && key != "tx_bps" {
+				return nil, fmt.Errorf("unknown bandwidth key %q on line %d", key, lineNumber+1)
+			}
+			if _, exists := rates[key]; exists {
+				return nil, fmt.Errorf("duplicate bandwidth key %q on line %d", key, lineNumber+1)
+			}
+			value, err := strconv.ParseUint(fields[i+1], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid %s on line %d: %w", key, lineNumber+1, err)
+			}
+			rates[key] = value
+		}
 
 		configs = append(configs, Pod{
 			PodName:      "",
 			PodNamespace: "",
 			PodUID:       "",
 			Prio:         -1,
-			CgroupDir:    cgroupPath,
+			CgroupDir:    fields[0],
 			QoSConfig: QoSConfig{
-				IngressBandwidth: rx,
-				EgressBandwidth:  tx,
+				IngressBandwidth: rates["rx_bps"],
+				EgressBandwidth:  rates["tx_bps"],
 			},
 		})
 	}
@@ -355,18 +370,32 @@ func (s *Syncer) parsePerCgroupConfig() ([]Pod, error) {
 }
 
 func (s *Syncer) podChangeLocked(config *types.PodConfig) error {
-	log.Info("update pod", "pod", config.PodID, "detail", fmt.Sprintf("%+v", config), "prio", *config.Prio)
-	err := s.podCache.Update(config)
-	if err != nil {
-		return err
+	effective := *config
+	cg := *config.CgroupInfo
+	effective.CgroupInfo = &cg
+	if pod, ok := s.filePods[filepath.Clean(cg.Path)]; ok {
+		if effective.Prio == nil && pod.Prio >= 0 && pod.Prio <= 2 {
+			prio := uint32(pod.Prio)
+			effective.Prio = &prio
+		}
+		if effective.RxBps == nil {
+			effective.RxBps = &pod.QoSConfig.IngressBandwidth
+		}
+		if effective.TxBps == nil {
+			effective.TxBps = &pod.QoSConfig.EgressBandwidth
+		}
 	}
-
-	if config.HostNetwork && config.Prio != nil {
-		err = s.cgroup.SetCgroupClassID(*config.Prio, config.CgroupInfo.Path)
-		if err != nil {
+	if effective.Prio != nil {
+		if *effective.Prio > 2 {
+			return fmt.Errorf("invalid pod priority: %d", *effective.Prio)
+		}
+		cg.ClassID = *effective.Prio
+	}
+	log.Info("update pod", "pod", effective.PodID, "classID", cg.ClassID)
+	if effective.HostNetwork {
+		if err := s.cgroup.SetCgroupClassID(cg.ClassID, cg.Path); err != nil {
 			return err
 		}
 	}
-
-	return s.bpf.WritePodInfo(config)
+	return s.bpf.WritePodInfo(&effective)
 }
